@@ -1,3 +1,5 @@
+[workspace]
+members = ["crates/core"]
 
 [package]
 edition = "2021"

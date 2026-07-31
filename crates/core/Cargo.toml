@@ -1,0 +1,16 @@
+[package]
+name = "xirr-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Financial functions (XIRR, IRR, NPV, PME) — port of the pyxirr core"
+
+[lib]
+doctest = false
+
+[dependencies]
+time = { version = "0.3", features = ["parsing", "macros"] }
+
+[dev-dependencies]
+assert_approx_eq = "1.1"
+rstest = { version = "0.26", default-features = false }
