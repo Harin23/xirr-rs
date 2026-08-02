@@ -1,7 +1,7 @@
 {
   "name": "xirr-rs",
   "version": "0.1.0",
-  "description": "Template project for writing node package with napi-rs",
+  "description": "rust based xirr for nodejs",
   "main": "index.js",
   "types": "index.d.ts",
   "browser": "browser.js",
@@ -11,17 +11,18 @@
   },
   "license": "MIT",
   "keywords": [
+    "xirr",
     "napi-rs",
-    "NAPI",
-    "N-API",
-    "Rust",
-    "node-addon",
-    "node-addon-api"
+    "Rust"
   ],
   "files": [
     "index.d.ts",
     "index.js",
-    "browser.js"
+    "browser.js",
+    "xirr-rs.wasi.cjs",
+    "xirr-rs.wasi-browser.js",
+    "wasi-worker.mjs",
+    "wasi-worker-browser.mjs"
   ],
   "napi": {
     "binaryName": "xirr-rs",
