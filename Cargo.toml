@@ -5,12 +5,15 @@ members = ["crates/core"]
 edition = "2021"
 name = "xirr_rs"
 version = "0.1.0"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
 napi-derive = "3.0.0"
+xirr-core = { path = "crates/core" }
+time = { version = "0.3", features = ["parsing", "macros"] }
 
 [dependencies.napi]
 version = "3.0.0"
