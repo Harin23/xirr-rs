@@ -4,17 +4,12 @@
   "description": "rust based xirr for nodejs",
   "main": "index.js",
   "types": "index.d.ts",
-  "browser": "browser.js",
   "repository": {
     "url": "https://github.com/Harin23/xirr-rs.git",
     "type": "git"
   },
   "license": "MIT",
-  "keywords": [
-    "xirr",
-    "napi-rs",
-    "Rust"
-  ],
+  "keywords": ["xirr", "irr", "npv", "xnpv", "mirr", "finance", "cashflow", "rust", "napi", "native"],
   "files": [
     "index.d.ts",
     "index.js"
@@ -31,9 +26,7 @@
       "x86_64-unknown-linux-musl"
     ]
   },
-  "engines": {
-    "node": ">= 10.16.0 < 11 || >= 11.8.0 < 12 || >= 12.0.0"
-  },
+  "engines": { "node": ">= 12.22.0" },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public"
