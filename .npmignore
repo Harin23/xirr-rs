@@ -1,0 +1,14 @@
+target/
+crates/
+src/
+__test__/
+benchmark/
+.cargo/
+.github/
+*.rs
+build.rs
+Cargo.toml
+Cargo.lock
+rustfmt.toml
+tsconfig.json
+pnpm-lock.yaml

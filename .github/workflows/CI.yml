@@ -65,6 +65,9 @@ jobs:
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
             build: pnpm build --target x86_64-unknown-linux-musl -x
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            build: pnpm build --target aarch64-unknown-linux-gnu --use-napi-cross
           - host: macos-latest
             target: aarch64-apple-darwin
             build: pnpm build --target aarch64-apple-darwin
@@ -200,6 +203,7 @@ jobs:
         target:
           - x86_64-unknown-linux-gnu
           - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
           - aarch64-unknown-linux-musl
         node:
           - '22'
@@ -279,12 +283,23 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: artifacts
-      - name: create npm dirs
-        run: pnpm napi create-npm-dirs
-      - name: Move artifacts
-        run: pnpm artifacts
-      - name: List packages
-        run: ls -R ./npm
+      - name: Flatten binaries into package root
+        run: find artifacts -name '*.node' -exec cp -f {} . \;
+        shell: bash
+      - name: Verify every target is present
+        run: |
+            missing=0
+            for t in darwin-arm64 darwin-x64 linux-x64-gnu linux-x64-musl \
+                     linux-arm64-gnu linux-arm64-musl win32-x64-msvc; do
+              if [ ! -f "xirr-rs.$t.node" ]; then
+                echo "::error::missing xirr-rs.$t.node"; missing=1
+              fi
+            done
+            ls -la *.node
+            exit $missing
+        shell: bash
+      - name: Verify tarball contents
+        run: npm pack --dry-run
         shell: bash
       - name: Publish
         run: |
