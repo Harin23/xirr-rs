@@ -1,0 +1,29 @@
+name: PR
+
+on:
+  pull_request:
+  merge_group:
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+
+  pr-ok:
+    name: pr-ok
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Roll up build result
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::build did not succeed"
+          exit 1
+      - run: echo "All PR checks passed."
