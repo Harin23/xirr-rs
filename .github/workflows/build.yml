@@ -28,7 +28,7 @@ jobs:
       - name: Install
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy, rustfmt, test rust
       - name: Install dependencies
         run: pnpm install
       - name: ESLint
@@ -37,6 +37,8 @@ jobs:
         run: cargo fmt -- --check
       - name: Clippy
         run: cargo clippy
+      - name: Cargo test
+        run: cargo test --workspace
   build:
     strategy:
       fail-fast: false
