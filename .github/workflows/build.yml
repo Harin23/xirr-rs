@@ -59,6 +59,9 @@ jobs:
           - host: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             build: pnpm build --target aarch64-unknown-linux-gnu --use-napi-cross
+          - name: Bindings are up to date
+            if: matrix.settings.target == 'x86_64-unknown-linux-gnu'
+            run: git diff --exit-code index.js index.d.ts
           - host: macos-latest
             target: aarch64-apple-darwin
             build: pnpm build --target aarch64-apple-darwin
