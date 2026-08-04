@@ -28,7 +28,7 @@ jobs:
       - name: Install
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt, test rust
+          components: clippy, rustfmt
       - name: Install dependencies
         run: pnpm install
       - name: ESLint
