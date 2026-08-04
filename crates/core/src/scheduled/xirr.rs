@@ -12,7 +12,7 @@ use super::{year_fraction, DayCount};
 use crate::{
   models::{validate, validate_length, DateLike, InvalidPaymentsError},
   optimize::{brentq, find_brackets, newton_excel_order, newton_residual},
-  utils::{cashflow_scale, is_a_good_rate},
+  utils::{cashflow_scale, is_a_good_rate_scaled},
 };
 
 /// The guess every spreadsheet uses when the caller omits one.
@@ -94,7 +94,7 @@ pub fn xirr(
       }
       for seed in [guess, 0.0, -0.5, -0.9, 0.5, 2.0, 10.0] {
         let r = newton_residual(seed, &fd, &f, scale);
-        if is_a_good_rate(r, &f, scale) {
+        if is_a_good_rate_scaled(r, &f, scale) {
           return Ok(r);
         }
       }
@@ -135,7 +135,7 @@ fn all_roots(amounts: &[f64], deltas: &[f64]) -> Vec<f64> {
   let mut roots: Vec<f64> = find_brackets(&f)
     .into_iter()
     .map(|(a, b)| brentq(&f, a, b, 100))
-    .filter(|r| is_a_good_rate(*r, &f, scale))
+    .filter(|r| is_a_good_rate_scaled(*r, &f, scale))
     .collect();
 
   roots.sort_by(|a, b| a.partial_cmp(b).unwrap());

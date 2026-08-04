@@ -46,7 +46,7 @@ where
   }
 
   let mut rate = guess;
-  let mut value = f64::NAN;
+  let mut value;
   let mut cont = false;
 
   for scan in 0..EXCEL_MAX_SCAN {
@@ -245,14 +245,111 @@ where
   f64::NAN
 }
 
+// ---------------------------------------------------------------------------
+// Legacy solvers retained for the PERIODIC code path (irr / mirr / npv), which
+// this change does not touch. They are NOT used by xirr - the parity path uses
+// `newton_excel_order` and the relative-tolerance `newton_residual` instead.
+// Do not point xirr at these: their tolerances are absolute.
+// ---------------------------------------------------------------------------
+
+const MAX_ERROR: f64 = 1e-9;
+const MAX_ITERATIONS: u32 = 50;
+const MAX_FX_TOL: f64 = 1e-3;
+
+pub fn newton_raphson<Func, Deriv>(start: f64, f: &Func, d: &Deriv) -> f64
+where
+  Func: Fn(f64) -> f64,
+  Deriv: Fn(f64) -> f64,
+{
+  // x[n + 1] = x[n] - f(x[n])/f'(x[n])
+
+  let mut x = start;
+
+  for _ in 0..MAX_ITERATIONS {
+    let y = f(x);
+
+    if y.abs() < MAX_ERROR {
+      return x;
+    }
+
+    let delta = y / d(x);
+
+    if delta.abs() < MAX_ERROR {
+      return x - delta;
+    }
+
+    x -= delta;
+  }
+
+  f64::NAN
+}
+
+// a slightly modified version that accepts a callback function that
+// calculates the result and the derivative at once
+pub fn newton_raphson_2<Func>(start: f64, fd: &Func) -> f64
+where
+  Func: Fn(f64) -> (f64, f64),
+{
+  // x[n + 1] = x[n] - f(x[n])/f'(x[n])
+
+  let mut x = start;
+
+  for _ in 0..MAX_ITERATIONS {
+    let (y0, y1) = fd(x);
+
+    if y0.abs() < MAX_ERROR {
+      return x;
+    }
+
+    let delta = y0 / y1;
+
+    if delta.abs() < MAX_ERROR && y0.abs() < MAX_FX_TOL {
+      return x;
+    }
+
+    x -= delta;
+  }
+
+  f64::NAN
+}
+
+pub fn newton_raphson_with_default_deriv<Func>(start: f64, f: Func) -> f64
+where
+  Func: Fn(f64) -> f64,
+{
+  // deriv = (f(x + e) - f(x - e))/((x + e) - x)
+  // multiply denominator by 2 for faster convergence
+
+  // https://programmingpraxis.com/2012/01/13/excels-xirr-function/
+
+  let df = |x| (f(x + MAX_ERROR) - f(x - MAX_ERROR)) / (2.0 * MAX_ERROR);
+  newton_raphson(start, &f, &df)
+}
+
+pub fn brentq_grid_search<'a, Func>(
+  breakpoints: &'a [&[f64]],
+  f: &'a Func,
+) -> impl Iterator<Item = f64> + 'a
+where
+  Func: Fn(f64) -> f64 + 'a,
+{
+  breakpoints
+    .iter()
+    .flat_map(|x| x.windows(2).map(|pair| brentq(f, pair[0], pair[1], 100)))
+    .filter(|r| r.is_finite() && f(*r).abs() < 1e-3)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
 
   #[test]
   fn excel_order_finds_the_leftmost_of_three_roots() {
-    // XNPV for [-1000, 3000, -2500, 600] on annual dates.
-    let d = [0.0, 1.0, 2.0, 3.0];
+    // XNPV for [-1000, 3000, -2500, 600] on 2015-01-01 .. 2018-01-01.
+    // Deltas are real ACT/365 year fractions - 2016 is a leap year, so
+    // idealised [0,1,2,3] gives a materially different root (-0.5696) and
+    // would not match the spreadsheet fixture.
+    let d = [0.0, 1.0, 2.002_739_726_027_397_4, 3.002_739_726_027_397_4];
     let a = [-1000., 3000., -2500., 600.];
     let fd = |r: f64| {
       if r <= -1.0 {

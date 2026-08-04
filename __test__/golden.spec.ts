@@ -13,15 +13,17 @@
  * policy legitimately does better.
  */
 import { readFileSync, existsSync } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 
 import test from 'ava'
 
 import { xirr, xnpv, xirrAllRoots, signChanges } from '../index.js'
+import type { RootPolicy } from '../index.js'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const GOLDEN = join(HERE, 'golden')
+// Resolved from cwd, not import.meta: this package is CommonJS
+// ("module": "CommonJS", no "type": "module"), so import.meta is unavailable.
+// ava always runs from the package root.
+const GOLDEN = join(process.cwd(), '__test__', 'golden')
 
 /** Relative tolerance. Engines differ in the last few ULP; 1e-9 is far tighter
  *  than any reporting requirement while still catching a wrong-root pick,
@@ -238,7 +240,7 @@ test('rejects input a spreadsheet would reject', (t) => {
     ['2021-01-01', 130],
   ])
   t.throws(() => xirr(d2, a2, -1))
-  t.throws(() => xirr(d2, a2, null, null, 'nearest' as never))
+  t.throws(() => xirr(d2, a2, null, null, 'nearest' as RootPolicy))
   const [d3, a3] = cf([
     ['2020-01-01', 100],
     ['2021-01-01', 130],

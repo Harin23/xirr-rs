@@ -62,9 +62,19 @@ pub(crate) fn cashflow_scale(values: &[f64]) -> f64 {
     .max(1.0)
 }
 
-pub(crate) fn is_a_good_rate<F>(rate: f64, f: &F, scale: f64) -> bool
+pub(crate) fn is_a_good_rate_scaled<F>(rate: f64, f: &F, scale: f64) -> bool
 where
   F: Fn(f64) -> f64,
 {
   rate.is_finite() && f(rate).abs() <= 1e-9 * scale
+}
+
+/// Legacy absolute-tolerance check, used only by the periodic (irr/mirr) path.
+/// Kept byte-for-byte so this change cannot perturb those results. The same
+/// scale-dependence bug applies there and should be fixed separately.
+pub(crate) fn is_a_good_rate<F>(rate: f64, f: F) -> bool
+where
+  F: Fn(f64) -> f64,
+{
+  rate.is_finite() && f(rate).abs() < 1e-3
 }
