@@ -18,7 +18,6 @@ import { join } from 'node:path'
 import test from 'ava'
 
 import { xirr, xnpv, xirrAllRoots, signChanges } from '../index.js'
-import type { RootPolicy } from '../index.js'
 
 // Resolved from cwd, not import.meta: this package is CommonJS
 // ("module": "CommonJS", no "type": "module"), so import.meta is unavailable.
@@ -240,7 +239,7 @@ test('rejects input a spreadsheet would reject', (t) => {
     ['2021-01-01', 130],
   ])
   t.throws(() => xirr(d2, a2, -1))
-  t.throws(() => xirr(d2, a2, null, null, 'nearest' as RootPolicy))
+  t.throws(() => xirr(d2, a2, null, null, 'nearest' as never))
   const [d3, a3] = cf([
     ['2020-01-01', 100],
     ['2021-01-01', 130],

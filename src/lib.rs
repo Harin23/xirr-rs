@@ -84,6 +84,10 @@ pub fn xirr(
   amounts: Float64Array,
   guess: Option<f64>,
   day_count_convention: Option<String>,
+  // napi regenerates index.d.ts on every build, so the TS type has to live
+  // here rather than in a hand-edited declaration file - otherwise the next
+  // `pnpm build` silently reverts it to `string`.
+  #[napi(ts_arg_type = "'spreadsheetThenRobust' | 'spreadsheet' | 'lowest' | 'closestToGuess'")]
   policy: Option<String>,
 ) -> Result<Option<f64>> {
   let d = to_dates(&dates)?;
