@@ -53,9 +53,18 @@ pub(crate) fn initial_guess(values: &[f64]) -> f64 {
   guess.clamp(-0.9, 0.1)
 }
 
-pub(crate) fn is_a_good_rate<F>(rate: f64, f: F) -> bool
+pub(crate) fn cashflow_scale(values: &[f64]) -> f64 {
+  values
+    .iter()
+    .filter(|v| v.is_finite())
+    .map(|v| v.abs())
+    .sum::<f64>()
+    .max(1.0)
+}
+
+pub(crate) fn is_a_good_rate<F>(rate: f64, f: &F, scale: f64) -> bool
 where
   F: Fn(f64) -> f64,
 {
-  rate.is_finite() && f(rate).abs() < 1e-3
+  rate.is_finite() && f(rate).abs() <= 1e-9 * scale
 }
