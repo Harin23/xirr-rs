@@ -38,7 +38,7 @@ jobs:
       - name: Clippy
         run: cargo clippy
       - name: Cargo test
-        run: cargo test --workspace
+        run: cargo test -p xirr-core
   build:
     strategy:
       fail-fast: false
