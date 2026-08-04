@@ -144,16 +144,13 @@ fn all_roots(amounts: &[f64], deltas: &[f64]) -> Vec<f64> {
 }
 
 fn pick_closest(roots: &[f64], guess: f64) -> Option<f64> {
-  roots
-    .iter()
-    .copied()
-    .min_by(|a, b| {
-      (*a - guess)
-        .abs()
-        .partial_cmp(&(*b - guess).abs())
-        .unwrap()
-        .then(a.partial_cmp(b).unwrap())
-    })
+  roots.iter().copied().min_by(|a, b| {
+    (*a - guess)
+      .abs()
+      .partial_cmp(&(*b - guess).abs())
+      .unwrap()
+      .then(a.partial_cmp(b).unwrap())
+  })
 }
 
 /// Spreadsheets raise #NUM! if any date precedes the first one rather than
@@ -241,7 +238,10 @@ mod tests {
 
   fn cf(rows: &[(&str, f64)]) -> (Vec<DateLike>, Vec<f64>) {
     (
-      rows.iter().map(|(d, _)| DateLike::from_str(d).unwrap()).collect(),
+      rows
+        .iter()
+        .map(|(d, _)| DateLike::from_str(d).unwrap())
+        .collect(),
       rows.iter().map(|(_, a)| *a).collect(),
     )
   }
@@ -280,9 +280,11 @@ mod tests {
   fn strict_compat_returns_nan_where_spreadsheet_shows_num() {
     // True IRR is -99.898%, below Calc's -0.99 rescan floor.
     let (d, a) = cf(&[("2020-01-01", -1000.), ("2021-01-01", 1.)]);
-    assert!(xirr(&d, &a, None, None, Some(RootPolicy::SpreadsheetCompat))
-      .unwrap()
-      .is_nan());
+    assert!(
+      xirr(&d, &a, None, None, Some(RootPolicy::SpreadsheetCompat))
+        .unwrap()
+        .is_nan()
+    );
     let robust = xirr(&d, &a, None, None, None).unwrap();
     assert!((robust - -0.9989809471).abs() < 1e-9, "got {robust}");
   }

@@ -105,7 +105,11 @@ where
     let step = v / d;
     x -= step;
     if step.abs() < 1e-12 {
-      return if f(x).abs() <= TOL * scale { x } else { f64::NAN };
+      return if f(x).abs() <= TOL * scale {
+        x
+      } else {
+        f64::NAN
+      };
     }
   }
   f64::NAN

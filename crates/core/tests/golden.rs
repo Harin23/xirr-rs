@@ -24,7 +24,12 @@ fn read_csv(name: &str) -> Vec<Vec<String>> {
     .lines()
     .skip(1)
     .filter(|l| !l.trim().is_empty())
-    .map(|l| l.trim_end_matches('\r').split(',').map(str::to_string).collect())
+    .map(|l| {
+      l.trim_end_matches('\r')
+        .split(',')
+        .map(str::to_string)
+        .collect()
+    })
     .collect()
 }
 
@@ -56,7 +61,11 @@ fn load_expected(engine: &str) -> Option<BTreeMap<String, Option<f64>>> {
     read_csv(&format!("expected_{engine}.csv"))
       .into_iter()
       .map(|r| {
-        let v = if r[1] == "NUM" { None } else { Some(r[1].parse().unwrap()) };
+        let v = if r[1] == "NUM" {
+          None
+        } else {
+          Some(r[1].parse().unwrap())
+        };
         (r[0].clone(), v)
       })
       .collect(),
@@ -106,7 +115,9 @@ fn matches_every_spreadsheet_engine_present() {
           )
           .unwrap();
           if strict.is_finite() {
-            failures.push(format!("{id}: strict policy should have failed, got {strict}"));
+            failures.push(format!(
+              "{id}: strict policy should have failed, got {strict}"
+            ));
           }
           if got.is_finite() {
             rescued.push(id.clone());
@@ -115,14 +126,20 @@ fn matches_every_spreadsheet_engine_present() {
       }
     }
 
-    assert!(compared > 50, "{engine}: thin corpus, only {compared} cases");
+    assert!(
+      compared > 50,
+      "{engine}: thin corpus, only {compared} cases"
+    );
     assert!(
       failures.is_empty(),
       "{engine}: {} divergence(s):\n  {}",
       failures.len(),
       failures.join("\n  ")
     );
-    println!("{engine}: {compared} matched, {} rescued: {rescued:?}", rescued.len());
+    println!(
+      "{engine}: {compared} matched, {} rescued: {rescued:?}",
+      rescued.len()
+    );
   }
 
   assert!(engines_checked > 0, "no golden files found");
@@ -161,7 +178,11 @@ fn single_sign_change_implies_a_unique_root() {
       continue;
     }
     let roots = xirr_all_roots(&c.dates, &c.amounts, None).unwrap();
-    assert!(roots.len() <= 1, "{id}: {} roots for a conventional flow", roots.len());
+    assert!(
+      roots.len() <= 1,
+      "{id}: {} roots for a conventional flow",
+      roots.len()
+    );
 
     if roots.len() == 1 {
       for policy in [
@@ -170,7 +191,11 @@ fn single_sign_change_implies_a_unique_root() {
         RootPolicy::ClosestToGuess,
       ] {
         let r = xirr(&c.dates, &c.amounts, None, None, Some(policy)).unwrap();
-        assert!(close(r, roots[0]), "{id}: {policy:?} gave {r}, root is {}", roots[0]);
+        assert!(
+          close(r, roots[0]),
+          "{id}: {policy:?} gave {r}, root is {}",
+          roots[0]
+        );
       }
     }
   }
