@@ -179,9 +179,9 @@ edge/trailing-zero,2022-01-01,0.0
 nosolution/lease-tail,2026-06-04,-176.0
 nosolution/lease-tail,2026-06-04,25000.0
 nosolution/lease-tail,2036-06-03,433.0
-nosolution/all-tiny-outflow,2020-01-01,-1e-06
-nosolution/all-tiny-outflow,2021-01-01,100000.0
-nosolution/all-tiny-outflow,2030-01-01,5.0
+edge/extreme-from-tiny-basis,2020-01-01,-1e-06
+edge/extreme-from-tiny-basis,2021-01-01,100000.0
+edge/extreme-from-tiny-basis,2030-01-01,5.0
 fuzz/000,2015-06-03,3700.0
 fuzz/000,2016-05-20,887.0
 fuzz/000,2016-07-21,-57.0

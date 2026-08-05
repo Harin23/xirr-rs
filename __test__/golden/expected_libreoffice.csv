@@ -36,7 +36,7 @@ edge/duplicate-dates,0.139970832454085
 edge/many-flows-60,0.012937936897914
 edge/trailing-zero,0.199402373269094
 nosolution/lease-tail,NUM
-nosolution/all-tiny-outflow,93313688206.6781
+edge/extreme-from-tiny-basis,93313688206.6781
 fuzz/000,NUM
 fuzz/001,0.263018253185422
 fuzz/002,-0.424266323867882

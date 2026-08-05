@@ -84,12 +84,39 @@ test('non-finite dates throw rather than producing garbage', (t) => {
 // ---------------------------------------------------------------------------
 
 test('returns null when no rate exists', (t) => {
+  // Mostly inflows with one small outflow late: XNPV never crosses zero.
+  // LibreOffice reports a numeric error here too (corpus case fuzz/000).
+  const [dates, amounts] = flow([
+    ['2015-06-03', 3700],
+    ['2016-05-20', 887],
+    ['2016-07-21', -57],
+    ['2017-09-11', 1124],
+  ])
+  t.is(xirr(dates, amounts), null)
+})
+
+test('an enormous but real rate is returned, not discarded', (t) => {
+  // A 1e-6 outflow returning 100,000 has a genuine IRR of ~9.3e10.
+  // Spreadsheets report it, so we must too - "implausibly large" is not the
+  // same as "no solution".
   const [dates, amounts] = flow([
     ['2020-01-01', -0.000001],
     ['2021-01-01', 100000],
     ['2030-01-01', 5],
   ])
-  t.is(xirr(dates, amounts), null)
+  const rate = xirr(dates, amounts)
+  t.true(rate !== null && Number.isFinite(rate), `got ${rate}`)
+  // Relative tolerance: one ULP at 9.3e10 is ~1.5e-5, so an absolute
+  // threshold here would be platform-fragile. This matches the golden
+  // suite's 1e-9 relative tolerance.
+  const expected = 93313688206.6781
+  t.true(Math.abs(rate! - expected) < 1e-9 * expected, `got ${rate}`)
+
+  // Regression: the root enumerator used to stop at 1e6 and report no roots
+  // for this flow, contradicting xirr on the same input.
+  const roots = xirrAllRoots(dates, amounts)
+  t.is(roots.length, 1)
+  t.true(Math.abs(roots[0] - rate!) < 1e-6 * Math.abs(rate!), `${roots[0]} vs ${rate}`)
 })
 
 test('never returns NaN to JavaScript', (t) => {
@@ -258,11 +285,19 @@ test('strict spreadsheet policy returns null where a spreadsheet shows #NUM!', (
 })
 
 test('policies agree when the root is unique', (t) => {
+  // One sign change means one root, so every policy must find the same rate.
+  // Compared with a tolerance rather than strict equality: the spreadsheet
+  // path reaches it by Newton and the enumerating policies by Brent, so they
+  // land within a ULP of each other but not on the same bit pattern.
   const [dates, amounts] = flow(SIMPLE)
+  t.is(signChanges(amounts), 1)
+
   const rates = (['spreadsheet', 'spreadsheetThenRobust', 'lowest', 'closestToGuess'] as const).map((p) =>
     xirr(dates, amounts, null, null, p),
   )
-  for (const r of rates) t.is(r, rates[0])
+  for (const r of rates) {
+    t.true(r !== null && Math.abs(r - rates[0]!) < 1e-12, `${r} vs ${rates[0]}`)
+  }
 })
 
 test('policies deliberately differ when roots are ambiguous', (t) => {

@@ -82,9 +82,14 @@ pub const RESIDUAL_REL_TOL: f64 = 1e-9;
 /// spread between two `brentq` runs converging on one root from two brackets.
 const DISTINCT_ROOT_TOL: f64 = 1e-7;
 
-/// Upper bound of the Phase 2 root search. 1e6 is 100,000,000% - a rate no
-/// real cash flow produces, but reachable by pathological inputs.
-const MAX_SEARCHED_RATE: f64 = 1.0e6;
+/// Upper bound of the Phase 2 root search.
+///
+/// Must stay at or above the rates Phase 1 can reach, otherwise [`xirr`] and
+/// [`xirr_all_roots`] disagree: a 1e-6 outflow returning 100,000 has a real
+/// IRR of 9.3e10, which Phase 1 finds and a 1e6 ceiling would miss. The grid
+/// above +100% grows geometrically, so raising this ceiling costs a few
+/// hundred extra evaluations, not a proportional number.
+const MAX_SEARCHED_RATE: f64 = 1.0e12;
 
 /// Seeds for the multi-start Newton fallback, tried in order after the
 /// caller's guess. Spread across the plausible range so a root that bracketing

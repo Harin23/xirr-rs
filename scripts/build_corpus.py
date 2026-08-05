@@ -88,12 +88,15 @@ add("edge/duplicate-dates", [(date(2020, 1, 1), -500), (date(2020, 1, 1), -500),
 add("edge/many-flows-60", [(date(2020 + i // 12, i % 12 + 1, 1), -10000 if i == 0 else 175) for i in range(60)])
 add("edge/trailing-zero", [(date(2020, 1, 1), -1000), (date(2021, 1, 1), 1200), (date(2022, 1, 1), 0)])
 
-# --- 7. no root exists (expect #NUM!) ---------------------------------------
+# --- 7. no root exists (expect a numeric error) -----------------------------
 add("nosolution/lease-tail", (
     [(date(2026, 6, 4), -176), (date(2026, 6, 4), 25000)]
     + [(date(2026 + (m - 7) // 12 + (1 if (m - 7) % 12 >= 0 else 0), 0, 1), 0) for m in []]
     + [(date(2036, 6, 3), 433)]))
-add("nosolution/all-tiny-outflow", [(date(2020, 1, 1), -0.000001), (date(2021, 1, 1), 100000), (date(2030, 1, 1), 5)])
+# NOT a no-solution case despite living here: a 1e-6 outflow returning
+# 100,000 has a real IRR of ~9.3e10, and spreadsheets do find it. Kept in
+# this position so existing row offsets are stable.
+add("edge/extreme-from-tiny-basis", [(date(2020, 1, 1), -0.000001), (date(2021, 1, 1), 100000), (date(2030, 1, 1), 5)])
 
 # --- 8. randomised fuzz corpus ---------------------------------------------
 for i in range(60):
