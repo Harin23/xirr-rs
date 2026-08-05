@@ -13,7 +13,7 @@ export declare function signChanges(amounts: Float64Array): number
  * including which root is chosen when several exist. Returns `null` where
  * those engines return #NUM! and no root can be found.
  */
-export declare function xirr(dates: Float64Array, amounts: Float64Array, guess?: number | undefined | null, dayCountConvention?: string | undefined | null, policy?: string | undefined | null): number | null
+export declare function xirr(dates: Float64Array, amounts: Float64Array, guess?: number | undefined | null, dayCountConvention?: string | undefined | null, policy?: 'spreadsheetThenRobust' | 'spreadsheet' | 'lowest' | 'closestToGuess'): number | null
 
 /**
  * Every rate at which XNPV crosses zero, ascending.

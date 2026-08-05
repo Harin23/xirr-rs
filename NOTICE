@@ -1,0 +1,33 @@
+xirr-rs
+Copyright (c) 2025 Harin23 and contributors
+
+Distributed under the MIT License. See LICENSE.
+
+================================================================================
+This product includes software developed at
+The Apache Software Foundation (https://www.apache.org/).
+
+The spreadsheet-parity iteration in `crates/core/src/optimize.rs`
+(`newton_excel_order`) is a port of `AnalysisAddIn::getXirr` from
+
+    main/scaddins/source/analysis/financial.cxx
+
+in Apache OpenOffice, licensed under the Apache License, Version 2.0. A copy of
+that licence is available at http://www.apache.org/licenses/LICENSE-2.0
+
+Constants and control flow are reproduced deliberately and exactly; see
+crates/core/docs/ALGORITHM.md for why.
+
+================================================================================
+Portions of the financial routines derive from pyxirr
+(https://github.com/Anexen/pyxirr), released into the public domain under the
+Unlicense (https://unlicense.org/).
+
+================================================================================
+`brentq` in `crates/core/src/optimize.rs` is a port of
+
+    scipy/optimize/Zeros/brentq.c
+
+from SciPy, licensed under the BSD 3-Clause License.
+Copyright (c) 2001-2002 Enthought, Inc. 2003-2024, SciPy Developers.
+All rights reserved.
