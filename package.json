@@ -1,6 +1,6 @@
 {
   "name": "xirr-rs",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "rust based xirr for nodejs",
   "main": "index.js",
   "types": "index.d.ts",
@@ -9,7 +9,18 @@
     "type": "git"
   },
   "license": "MIT",
-  "keywords": ["xirr", "irr", "npv", "xnpv", "mirr", "finance", "cashflow", "rust", "napi", "native"],
+  "keywords": [
+    "xirr",
+    "irr",
+    "npv",
+    "xnpv",
+    "mirr",
+    "finance",
+    "cashflow",
+    "rust",
+    "napi",
+    "native"
+  ],
   "files": [
     "index.d.ts",
     "index.js",
@@ -29,7 +40,9 @@
       "x86_64-unknown-linux-musl"
     ]
   },
-  "engines": { "node": ">= 12.22.0" },
+  "engines": {
+    "node": ">= 12.22.0"
+  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public"
