@@ -47,12 +47,9 @@ pub(crate) fn sum_negatives_positives(values: &[f64]) -> (f64, f64) {
   })
 }
 
-pub(crate) fn initial_guess(values: &[f64]) -> f64 {
-  let (outflows, inflows) = sum_negatives_positives(values);
-  let guess = inflows / -outflows - 1.0;
-  guess.clamp(-0.9, 0.1)
-}
-
+/// Legacy absolute-tolerance check, used only by the periodic (irr/mirr) path.
+/// Kept byte-for-byte so this change cannot perturb those results. The same
+/// scale-dependence bug applies there and should be fixed separately.
 pub(crate) fn is_a_good_rate<F>(rate: f64, f: F) -> bool
 where
   F: Fn(f64) -> f64,
