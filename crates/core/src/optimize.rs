@@ -85,31 +85,34 @@ where
   }
 }
 
-/// Newton with a *relative* residual gate. Used only in the robust fallback,
-/// never on the parity path.
-pub fn newton_residual<FD, F>(start: f64, fd: &FD, f: &F, scale: f64) -> f64
+/// Newton's method that stops on a caller-supplied residual tolerance.
+///
+/// Used only by the robust fallback, never on the parity path - Phase 1 has
+/// its own convergence test that must not be second-guessed. The tolerance is
+/// a parameter rather than a constant so the single source of truth stays in
+/// `xirr.rs`, where it can be documented next to the other tolerances.
+pub fn newton_to_residual<FD>(start: f64, fd: &FD, residual_tol: f64) -> f64
 where
   FD: Fn(f64) -> (f64, f64),
-  F: Fn(f64) -> f64,
 {
-  const TOL: f64 = 1e-9;
-  let mut x = start;
-  for _ in 0..50 {
-    let (v, d) = fd(x);
-    if !v.is_finite() || d == 0.0 {
+  const MAX_ITER: u32 = 50;
+  /// Below this the step has stopped moving; either we are at a root or we
+  /// are stuck on a flat spot, and the caller's `is_root` check decides which.
+  const STALLED_STEP: f64 = 1e-12;
+
+  let mut rate = start;
+  for _ in 0..MAX_ITER {
+    let (value, deriv) = fd(rate);
+    if !value.is_finite() || deriv == 0.0 {
       return f64::NAN;
     }
-    if v.abs() <= TOL * scale {
-      return x;
+    if value.abs() <= residual_tol {
+      return rate;
     }
-    let step = v / d;
-    x -= step;
-    if step.abs() < 1e-12 {
-      return if f(x).abs() <= TOL * scale {
-        x
-      } else {
-        f64::NAN
-      };
+    let step = value / deriv;
+    rate -= step;
+    if step.abs() < STALLED_STEP {
+      return rate;
     }
   }
   f64::NAN
@@ -120,13 +123,18 @@ where
 /// Dense and linear near zero where realistic rates live, geometric above 1.0
 /// so pathological cash flows with four-digit IRRs are still bracketed without
 /// the grid costing a million evaluations.
-pub fn find_brackets<Func>(f: &Func) -> Vec<(f64, f64)>
+pub fn find_brackets<Func>(f: &Func, max_rate: f64) -> Vec<(f64, f64)>
 where
   Func: Fn(f64) -> f64,
 {
+  /// Just inside the domain boundary at -1, where XNPV goes to infinity.
   const LO: f64 = -0.999_999_999_9;
-  const HI: f64 = 1.0e6;
+  /// Grid spacing below +100%, where realistic rates live.
   const FINE_STEP: f64 = 0.005;
+  /// Above +100% the grid grows geometrically: 5% wider each step, so the
+  /// whole range up to `max_rate` costs a few hundred evaluations, not a
+  /// million.
+  const COARSE_GROWTH: f64 = 1.05;
 
   let mut grid = Vec::with_capacity(1024);
   grid.push(LO);
@@ -136,11 +144,11 @@ where
     x += FINE_STEP;
   }
   let mut x = 1.0;
-  while x < HI {
+  while x < max_rate {
     grid.push(x);
-    x *= 1.05;
+    x *= COARSE_GROWTH;
   }
-  grid.push(HI);
+  grid.push(max_rate);
 
   let mut out = Vec::new();
   let mut prev_x = grid[0];
@@ -248,13 +256,12 @@ where
 // ---------------------------------------------------------------------------
 // Legacy solvers retained for the PERIODIC code path (irr / mirr / npv), which
 // this change does not touch. They are NOT used by xirr - the parity path uses
-// `newton_excel_order` and the relative-tolerance `newton_residual` instead.
+// `newton_excel_order` and the relative-tolerance `newton_to_residual` instead.
 // Do not point xirr at these: their tolerances are absolute.
 // ---------------------------------------------------------------------------
 
 const MAX_ERROR: f64 = 1e-9;
 const MAX_ITERATIONS: u32 = 50;
-const MAX_FX_TOL: f64 = 1e-3;
 
 pub fn newton_raphson<Func, Deriv>(start: f64, f: &Func, d: &Deriv) -> f64
 where
@@ -286,33 +293,6 @@ where
 
 // a slightly modified version that accepts a callback function that
 // calculates the result and the derivative at once
-pub fn newton_raphson_2<Func>(start: f64, fd: &Func) -> f64
-where
-  Func: Fn(f64) -> (f64, f64),
-{
-  // x[n + 1] = x[n] - f(x[n])/f'(x[n])
-
-  let mut x = start;
-
-  for _ in 0..MAX_ITERATIONS {
-    let (y0, y1) = fd(x);
-
-    if y0.abs() < MAX_ERROR {
-      return x;
-    }
-
-    let delta = y0 / y1;
-
-    if delta.abs() < MAX_ERROR && y0.abs() < MAX_FX_TOL {
-      return x;
-    }
-
-    x -= delta;
-  }
-
-  f64::NAN
-}
-
 pub fn newton_raphson_with_default_deriv<Func>(start: f64, f: Func) -> f64
 where
   Func: Fn(f64) -> f64,
@@ -375,7 +355,7 @@ mod tests {
   #[test]
   fn brackets_capture_every_sign_change() {
     let f = |x: f64| (x - 0.05) * (x - 0.5) * (x - 3.0);
-    let b = find_brackets(&f);
+    let b = find_brackets(&f, 1.0e6);
     assert_eq!(b.len(), 3);
     for (lo, hi) in b {
       let r = brentq(&f, lo, hi, 100);
