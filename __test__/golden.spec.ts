@@ -17,7 +17,8 @@ import { join } from 'node:path'
 
 import test from 'ava'
 
-import { xirr, xnpv, xirrAllRoots, signChanges } from '../index.js'
+// See edge-cases.spec.ts: `xirrRate` is the numeric form of `xirr`.
+import { xirrRate as xirr, xnpv, xirrAllRoots, signChanges } from '../index.js'
 
 // Resolved from cwd, not import.meta: this package is CommonJS
 // ("module": "CommonJS", no "type": "module"), so import.meta is unavailable.
@@ -194,7 +195,7 @@ test('picks the spreadsheet root, not the brentq root', (t) => {
   ])
   t.true(Math.abs(xirr(d, a)! - -0.571885951525731) < 1e-9)
   t.is(xirrAllRoots(d, a).length, 3)
-  t.is(signChanges(a), 3)
+  t.is(signChanges(d, a), 3)
 })
 
 test('result is stable across cash flow magnitude', (t) => {

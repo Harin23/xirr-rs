@@ -1,0 +1,58 @@
+name: Determinism
+
+# The solver's answer must not depend on the machine it ran on. A rate that
+# differs between a developer's laptop and a production container is a
+# reconciliation incident, not a rounding curiosity.
+#
+# `exp`, `ln`, `expm1` and `powf` are not bit-specified by IEEE 754 and are
+# allowed to differ by an ULP between libm implementations. This job runs the
+# core suite - which pins reference rates to a documented relative tolerance,
+# and pins bit-stability *within* a platform - on every libm the package ships
+# against. See `crates/core/tests/determinism.rs` for what is asserted and why
+# the tolerance is relative rather than exact.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cross-platform:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: ubuntu-latest
+            label: linux-glibc
+          - host: macos-latest
+            label: macos-arm64
+          - host: windows-latest
+            label: windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: determinism-${{ matrix.label }}
+
+      # The whole core suite, not just the determinism file: the parity
+      # snapshot and the property test are equally platform-sensitive, and a
+      # divergence in either is the same class of problem.
+      - name: Core test suite
+        run: cargo test -p xirr-core --release
+
+      - name: Determinism assertions
+        run: cargo test -p xirr-core --release --test determinism -- --nocapture

@@ -91,75 +91,107 @@ where
 /// its own convergence test that must not be second-guessed. The tolerance is
 /// a parameter rather than a constant so the single source of truth stays in
 /// `xirr.rs`, where it can be documented next to the other tolerances.
+///
+/// The variable is unnamed on purpose: `xirr` drives this in **log-rate
+/// space** (`u = ln(1 + r)`), the periodic paths do not use it at all. The
+/// only assumption is that `fd` returns `(f(x), f'(x))` in the same space.
 pub fn newton_to_residual<FD>(start: f64, fd: &FD, residual_tol: f64) -> f64
 where
   FD: Fn(f64) -> (f64, f64),
 {
-  const MAX_ITER: u32 = 50;
-  /// Below this the step has stopped moving; either we are at a root or we
-  /// are stuck on a flat spot, and the caller's `is_root` check decides which.
-  const STALLED_STEP: f64 = 1e-12;
+  const MAX_ITER: u32 = 60;
 
-  let mut rate = start;
+  let mut x = start;
   for _ in 0..MAX_ITER {
-    let (value, deriv) = fd(rate);
-    if !value.is_finite() || deriv == 0.0 {
+    let (value, deriv) = fd(x);
+    if !value.is_finite() || !deriv.is_finite() || deriv == 0.0 {
       return f64::NAN;
     }
     if value.abs() <= residual_tol {
-      return rate;
+      return x;
     }
     let step = value / deriv;
-    rate -= step;
-    if step.abs() < STALLED_STEP {
-      return rate;
+    x -= step;
+    if !x.is_finite() {
+      return f64::NAN;
+    }
+    if step.abs() <= stalled_step(x) {
+      return x;
     }
   }
   f64::NAN
 }
 
-/// Sign-change brackets for XNPV over `(-1, 1e6]`.
+/// Below this the step has stopped moving; either we are at a root or we are
+/// stuck on a flat spot, and the caller's `is_root` check decides which.
 ///
-/// Dense and linear near zero where realistic rates live, geometric above 1.0
-/// so pathological cash flows with four-digit IRRs are still bracketed without
-/// the grid costing a million evaluations.
-pub fn find_brackets<Func>(f: &Func, max_rate: f64) -> Vec<(f64, f64)>
+/// **Relative**, floored at the absolute value the previous revision used.
+/// An absolute 1e-12 is unsatisfiable wherever one ULP of `x` exceeds it -
+/// at `x = 1e20` one ULP is ~16384 - so the old test could only ever be met
+/// near the origin. That is the same defect as the parity path's absolute
+/// epsilon, and it is why raising iteration counts never helped.
+fn stalled_step(x: f64) -> f64 {
+  const STALLED_STEP_REL: f64 = 1e-12;
+  STALLED_STEP_REL * x.abs().max(1.0)
+}
+
+/// Where `f` meets zero between consecutive nodes of a caller-supplied grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Crossing {
+  /// `f` changed sign between these two abscissae. Hand to [`brentq`].
+  Bracket(f64, f64),
+  /// `f` was *exactly* zero at this node. Already a root; no refinement
+  /// needed, and refining would be wrong - `brentq` treats an endpoint zero
+  /// as a terminal answer anyway.
+  Exact(f64),
+}
+
+/// Every sign change of `f` across `grid`, in ascending order.
+///
+/// The grid is a parameter rather than something this function invents,
+/// because the right grid depends on the space being searched: `xirr` searches
+/// log-rate space, where a uniform step is a *constant relative* step in the
+/// rate and the whole representable domain fits in a bounded interval.
+///
+/// # Exact zeros are not sign changes
+///
+/// `f64::signum` reports `+1.0` for `0.0`, so a naive `signum` comparison
+/// manufactures a bracket every time the function touches zero from below and
+/// invents one where a value underflowed to zero. Both are reported here as
+/// [`Crossing::Exact`] instead, and a node with a non-finite value contributes
+/// no sign information at all rather than a spurious change.
+pub fn find_crossings<Func>(grid: &[f64], f: &Func) -> Vec<Crossing>
 where
   Func: Fn(f64) -> f64,
 {
-  /// Just inside the domain boundary at -1, where XNPV goes to infinity.
-  const LO: f64 = -0.999_999_999_9;
-  /// Grid spacing below +100%, where realistic rates live.
-  const FINE_STEP: f64 = 0.005;
-  /// Above +100% the grid grows geometrically: 5% wider each step, so the
-  /// whole range up to `max_rate` costs a few hundred evaluations, not a
-  /// million.
-  const COARSE_GROWTH: f64 = 1.05;
-
-  let mut grid = Vec::with_capacity(1024);
-  grid.push(LO);
-  let mut x = -0.99;
-  while x <= 1.0 {
-    grid.push(x);
-    x += FINE_STEP;
+  /// `Some(true)` positive, `Some(false)` negative, `None` for zero or
+  /// non-finite - i.e. "carries no sign information".
+  fn sign_of(v: f64) -> Option<bool> {
+    if !v.is_finite() || v == 0.0 {
+      None
+    } else {
+      Some(v > 0.0)
+    }
   }
-  let mut x = 1.0;
-  while x < max_rate {
-    grid.push(x);
-    x *= COARSE_GROWTH;
-  }
-  grid.push(max_rate);
 
   let mut out = Vec::new();
-  let mut prev_x = grid[0];
-  let mut prev_f = f(prev_x);
-  for &cx in &grid[1..] {
-    let cf = f(cx);
-    if prev_f.is_finite() && cf.is_finite() && prev_f != 0.0 && prev_f.signum() != cf.signum() {
-      out.push((prev_x, cx));
+  let mut anchor: Option<(f64, bool)> = None;
+
+  for &x in grid {
+    let v = f(x);
+    if v == 0.0 {
+      out.push(Crossing::Exact(x));
+      // Restart: the interval on the far side of an exact root is a fresh
+      // search, not a continuation of the one that ended here.
+      anchor = None;
+      continue;
     }
-    prev_x = cx;
-    prev_f = cf;
+    let Some(sign) = sign_of(v) else { continue };
+    match anchor {
+      Some((prev_x, prev_sign)) if prev_sign != sign => out.push(Crossing::Bracket(prev_x, x)),
+      _ => {}
+    }
+    anchor = Some((x, sign));
   }
   out
 }
@@ -352,14 +384,37 @@ mod tests {
     assert!(newton_excel_order(f64::NAN, &fd).is_nan());
   }
 
+  fn linear_grid(lo: f64, hi: f64, step: f64) -> Vec<f64> {
+    let n = ((hi - lo) / step).ceil() as usize;
+    (0..=n).map(|i| (lo + i as f64 * step).min(hi)).collect()
+  }
+
   #[test]
   fn brackets_capture_every_sign_change() {
     let f = |x: f64| (x - 0.05) * (x - 0.5) * (x - 3.0);
-    let b = find_brackets(&f, 1.0e6);
-    assert_eq!(b.len(), 3);
-    for (lo, hi) in b {
-      let r = brentq(&f, lo, hi, 100);
+    let b = find_crossings(&linear_grid(-1.0, 10.0, 0.005), &f);
+    assert_eq!(b.len(), 3, "{b:?}");
+    for c in b {
+      let r = match c {
+        Crossing::Bracket(lo, hi) => brentq(&f, lo, hi, 100),
+        Crossing::Exact(x) => x,
+      };
       assert!(f(r).abs() < 1e-9);
     }
+  }
+
+  #[test]
+  fn an_exact_zero_is_reported_once_and_not_as_a_sign_change() {
+    // Touches zero at 0 from below on both sides: a naive `signum` compare
+    // reports two brackets here, because `(0.0).signum()` is `+1.0`.
+    let f = |x: f64| -(x * x);
+    let found = find_crossings(&linear_grid(-1.0, 1.0, 0.25), &f);
+    assert_eq!(found, vec![Crossing::Exact(0.0)], "{found:?}");
+  }
+
+  #[test]
+  fn non_finite_nodes_do_not_manufacture_brackets() {
+    let f = |x: f64| if x == 0.0 { f64::NAN } else { -1.0 };
+    assert!(find_crossings(&linear_grid(-1.0, 1.0, 0.5), &f).is_empty());
   }
 }
