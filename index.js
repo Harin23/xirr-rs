@@ -560,4 +560,5 @@ module.exports = nativeBinding
 module.exports.signChanges = nativeBinding.signChanges
 module.exports.xirr = nativeBinding.xirr
 module.exports.xirrAllRoots = nativeBinding.xirrAllRoots
+module.exports.xirrRate = nativeBinding.xirrRate
 module.exports.xnpv = nativeBinding.xnpv

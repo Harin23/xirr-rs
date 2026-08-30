@@ -89,7 +89,11 @@ pub struct XirrResult {
   )]
   pub status: String,
   /// The rate, or `null` for every failure status. Never `NaN`.
-  pub rate: Option<f64>,
+  // `Either<f64, Null>` rather than `Option<f64>`: napi omits the property
+  // entirely for `None`, which reads as `undefined` in JS. A missing key and
+  // an explicit "there is no rate" are not the same claim, and `xirrRate`
+  // already returns a real `null` - the two surfaces have to agree.
+  pub rate: Either<f64, Null>,
   /// Every root found, ascending. Empty for every failure status. A length
   /// above one means the IRR is genuinely ambiguous and `rate` is a
   /// convention, not a fact.
@@ -99,11 +103,13 @@ pub struct XirrResult {
 impl From<fin::XirrOutcome> for XirrResult {
   fn from(outcome: fin::XirrOutcome) -> Self {
     let (status, rate, roots) = match outcome {
-      fin::XirrOutcome::Root(r) => ("root", Some(r), vec![r]),
-      fin::XirrOutcome::MultipleRoots { selected, all } => ("multipleRoots", Some(selected), all),
-      fin::XirrOutcome::NoRootExists => ("noRootExists", None, Vec::new()),
-      fin::XirrOutcome::DidNotConverge => ("didNotConverge", None, Vec::new()),
-      fin::XirrOutcome::SpreadsheetNumError => ("spreadsheetNumError", None, Vec::new()),
+      fin::XirrOutcome::Root(r) => ("root", Either::A(r), vec![r]),
+      fin::XirrOutcome::MultipleRoots { selected, all } => {
+        ("multipleRoots", Either::A(selected), all)
+      }
+      fin::XirrOutcome::NoRootExists => ("noRootExists", Either::B(Null), Vec::new()),
+      fin::XirrOutcome::DidNotConverge => ("didNotConverge", Either::B(Null), Vec::new()),
+      fin::XirrOutcome::SpreadsheetNumError => ("spreadsheetNumError", Either::B(Null), Vec::new()),
     };
     Self {
       status: status.to_string(),
