@@ -786,6 +786,40 @@ impl CashFlow {
     from_log_rate(newton_to_residual(u, &|u| self.netted.scaled_g(u), 0.0))
   }
 
+  /// Turning points of `G` inside the searched domain: the `u` where `G'`
+  /// changes sign, refined by the same bracketing the value uses.
+  ///
+  /// This is what makes an **even** number of sign changes tractable. With an
+  /// odd number the two domain limits differ, so a grid spanning the domain
+  /// must contain a bracket and Brent cannot fail. With an even number roots
+  /// arrive in pairs, and a pair is invisible to a sign-change scan of `G` in
+  /// two ways:
+  ///
+  /// - both roots fall inside one grid cell, so `G` carries the same sign at
+  ///   the two nodes that straddle them;
+  /// - the curve touches zero without crossing - a double root - so no
+  ///   bracket exists anywhere, at any resolution.
+  ///
+  /// One observation covers both. Between two roots `G'` must change sign, and
+  /// at a double root `G'` is zero. So every root that a scan of `G` can miss
+  /// has a turning point at or between the pair, and `G'` *does* change sign
+  /// there even where `G` does not. Feeding those points back into the grid
+  /// splits the offending cell, after which each root brackets normally.
+  ///
+  /// Nearly free: [`NettedFlow::scaled_g`] already computes the derivative
+  /// alongside the value, so only the refinement is new work.
+  fn turning_points(&self, grid: &[f64]) -> Vec<f64> {
+    let dg = |u| self.netted.scaled_g(u).1;
+    find_crossings(grid, &dg)
+      .into_iter()
+      .map(|crossing| match crossing {
+        Crossing::Bracket(lo, hi) => brentq(&dg, lo, hi, 100),
+        Crossing::Exact(u) => u,
+      })
+      .filter(|u| u.is_finite())
+      .collect()
+  }
+
   /// Every root in `(-1, f64::MAX]`, ascending and deduplicated.
   ///
   /// Searches in `u = ln(1 + r)`, so the reachable range is the representable
@@ -809,8 +843,19 @@ impl CashFlow {
     // correctly rather than rely on that.
     let descartes_bound = self.netted.sign_changes().max(1);
 
+    // Refine the grid at the turning points before bracketing anything: a
+    // cell holding a pair of roots has one between them, and splitting there
+    // turns a pair the scan cannot see into two ordinary brackets. See
+    // [`CashFlow::turning_points`] for why this is the whole even-sign-change
+    // case.
+    let mut grid = log_rate_grid();
+    let extrema = self.turning_points(&grid);
+    grid.extend_from_slice(&extrema);
+    grid.sort_by(f64::total_cmp);
+    grid.dedup();
+
     let mut in_u: Vec<f64> = Vec::new();
-    for crossing in find_crossings(&log_rate_grid(), &g) {
+    for crossing in find_crossings(&grid, &g) {
       let u = match crossing {
         Crossing::Bracket(lo, hi) => brentq(&g, lo, hi, 100),
         Crossing::Exact(u) => u,
@@ -822,6 +867,40 @@ impl CashFlow {
         break; // Descartes: there cannot be another one.
       }
     }
+
+    // A double root is a turning point that no bracket contains, so it has to
+    // be offered as a candidate rather than found. The `is_root` filter below
+    // is what decides whether it is real: a turning point that merely comes
+    // close to zero fails it, exactly as a bracketed candidate would. No new
+    // tolerance is needed and none is introduced.
+    //
+    // Only turning points that no pair of roots straddles are offered.
+    // Between two simple roots there is always a turning point and it is not
+    // itself a root, so offering it would report a third root in the middle of
+    // a pair - which is what a near-double root looks like from the outside.
+    // A genuinely tangential root has no such pair around it, precisely
+    // because the curve never crossed.
+    //
+    // Testing the neighbouring grid nodes instead does not work: the pair can
+    // be narrower than one cell, which is the case this whole mechanism exists
+    // for, and then both neighbours sit outside the pair and carry the same
+    // sign. The roots already found are the only reliable witnesses.
+    //
+    // Known blind spot: a tangential root lying between two simple roots is
+    // skipped. It needs at least four sign changes and a curve that touches
+    // zero exactly between two crossings without the touch being one of them.
+    // `xirr` still answers such a flow; only the enumeration is short by one.
+    in_u.sort_by(f64::total_cmp);
+    let straddled_by_a_pair = |u: f64| {
+      let below = in_u.partition_point(|root| *root < u);
+      below > 0 && below < in_u.len()
+    };
+    in_u.extend(
+      extrema
+        .into_iter()
+        .filter(|u| !straddled_by_a_pair(*u))
+        .collect::<Vec<_>>(),
+    );
 
     // Deduplicate in `u`, where the tolerance is scale-free, before the
     // conversion collapses distinguishable large rates onto each other.

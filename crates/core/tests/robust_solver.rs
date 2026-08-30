@@ -984,3 +984,310 @@ fn the_searched_domain_matches_the_representable_domain() {
   assert!(MAX_SEARCHED_LOG_RATE.exp_m1().is_finite());
   assert!((MAX_SEARCHED_LOG_RATE + 1.0).exp_m1().is_infinite());
 }
+
+// ===========================================================================
+// 10. Property test: an even number of sign changes
+// ===========================================================================
+//
+// The odd case is settled by construction: with an odd number of netted sign
+// changes `G` has opposite signs at the two ends of the searched domain, so a
+// grid spanning that domain *must* contain a bracket and Brent cannot fail.
+// `a_single_sign_change_always_yields_a_root` covers it.
+//
+// An even number proves nothing. Roots arrive in pairs, and a pair is
+// invisible to a sign-change scan in two situations:
+//
+//   1. both roots fall inside one grid cell, so `G` has the same sign at the
+//      two nodes that straddle them;
+//   2. the curve touches zero without crossing it - a double root - so no
+//      bracket exists anywhere at any resolution.
+//
+// Neither is exotic: a fund with a clawback that very nearly breaks even
+// produces exactly case 2. These tests build flows whose roots are known
+// *by construction* and check the solver reports them.
+
+/// Three payments at `δ = 0, 1, 2` whose XNPV factorises as
+/// `(x - x₁)(x - x₂)` in `x = (1 + r)⁻¹`, so its roots are exactly `u₁` and
+/// `u₂` and no solving is needed to know the answer.
+///
+/// Returns the dates, the amounts, and the day offsets the brute-force
+/// reference below uses.
+fn flow_with_roots(u1: f64, u2: f64) -> (Vec<DateLike>, Vec<f64>, Vec<i64>) {
+  let (x1, x2) = ((-u1).exp(), (-u2).exp());
+  // (x - x1)(x - x2) = x1·x2 - (x1 + x2)·x + x², and the coefficient of xⁱ is
+  // the payment at δ = i.
+  let amounts = vec![x1 * x2, -(x1 + x2), 1.0];
+  let dates = vec![
+    DateLike::from_str("2015-01-01").unwrap(),
+    DateLike::from_str("2016-01-01").unwrap(), // +365 days: δ = 1 under ACT/365F
+    DateLike::from_str("2016-12-31").unwrap(), // +730 days: δ = 2
+  ];
+  (dates, amounts, vec![0, 365, 730])
+}
+
+/// `G(u) = Σ aᵢ·exp(-u·δᵢ)`, evaluated from first principles.
+///
+/// Deliberately does not call the library: a reference derived from the code
+/// under test proves nothing. `δ` comes from day offsets the caller already
+/// knows, so not even the date arithmetic is shared. The dominant-term scaling
+/// is the same guard the solver uses, but that is an overflow precaution, not
+/// a search - the search below is brute force and shares nothing.
+fn reference_g(days: &[i64], amounts: &[f64], u: f64) -> f64 {
+  let d_ref = if u >= 0.0 {
+    days[0]
+  } else {
+    days[days.len() - 1]
+  } as f64
+    / 365.0;
+  days
+    .iter()
+    .zip(amounts)
+    .map(|(&d, &a)| a * (-u * (d as f64 / 365.0 - d_ref)).exp())
+    .sum()
+}
+
+/// Every root of `G` in `[lo, hi]`, by brute force: a scan ten times finer
+/// than the solver's densest band, refined by bisection. Slow and stupid on
+/// purpose - it is the yardstick, so it must not be clever.
+fn reference_roots(days: &[i64], amounts: &[f64], lo: f64, hi: f64) -> Vec<f64> {
+  const STEP: f64 = 1e-3;
+  const BISECTIONS: u32 = 200;
+
+  let mut out = Vec::new();
+  let steps = ((hi - lo) / STEP).ceil() as usize;
+  let (mut prev_u, mut prev_v) = (lo, reference_g(days, amounts, lo));
+
+  for i in 1..=steps {
+    let u = lo + i as f64 * STEP;
+    let v = reference_g(days, amounts, u);
+    if prev_v != 0.0 && v != 0.0 && (prev_v > 0.0) != (v > 0.0) {
+      let (mut a, mut b, mut fa) = (prev_u, u, prev_v);
+      for _ in 0..BISECTIONS {
+        let m = 0.5 * (a + b);
+        let fm = reference_g(days, amounts, m);
+        if (fa > 0.0) != (fm > 0.0) {
+          b = m;
+        } else {
+          a = m;
+          fa = fm;
+        }
+      }
+      out.push(0.5 * (a + b));
+    }
+    (prev_u, prev_v) = (u, v);
+  }
+  out
+}
+
+/// Is `rate` within one part in `1e-6` of `expected`? Loose on purpose: the
+/// question here is "did the solver find this root at all", not "to how many
+/// digits", which `every_returned_rate_passes_the_documented_audit_check`
+/// already pins.
+fn found(reported: &[f64], expected: f64) -> bool {
+  reported
+    .iter()
+    .any(|r| (r - expected).abs() <= 1e-6 * expected.abs().max(1.0))
+}
+
+#[test]
+fn a_pair_of_roots_inside_one_grid_cell_is_still_found() {
+  // Acceptance 10a. The solver's densest band steps 0.01 in `u`, so two roots
+  // closer than that share a cell and `G` has the same sign at both ends of
+  // it. The gaps below straddle that width deliberately.
+  let mut rng = Rng(0xC0FF_EE00_1234_5678);
+  let mut checked = 0usize;
+
+  for trial in 0..400 {
+    let u1 = rng.uniform(-6.0, 6.0);
+    // Sub-cell, cell-width, and comfortably-wider gaps, in that proportion.
+    let gap = match trial % 3 {
+      0 => rng.uniform(1e-3, 9e-3),
+      1 => rng.uniform(9e-3, 3e-2),
+      _ => rng.uniform(3e-2, 5e-1),
+    };
+    let (dates, amounts, days) = flow_with_roots(u1, u1 + gap);
+
+    // Skip anything the library would reject outright, or that netting
+    // collapses - the claim under test is about the search, not validation.
+    if sign_changes(&dates, &amounts, None).unwrap() != 2 {
+      continue;
+    }
+    let expected = reference_roots(&days, &amounts, u1 - 1.0, u1 + gap + 1.0);
+    if expected.len() != 2 {
+      continue; // conditioning lost one of them; not this test's subject
+    }
+
+    checked += 1;
+    let reported = xirr_all_roots(&dates, &amounts, None).unwrap();
+
+    for u in &expected {
+      let rate = u.exp_m1();
+      assert!(
+        found(&reported, rate),
+        "trial {trial}: gap {gap:.5} in u\n  \
+         expected a root at r = {rate:e} (u = {u:.6})\n  \
+         xirr_all_roots returned {reported:?}\n  \
+         amounts {amounts:?}"
+      );
+    }
+  }
+
+  assert!(checked > 100, "only {checked} flows exercised the property");
+  println!("pairs inside one grid cell: {checked} flows checked");
+}
+
+#[test]
+fn a_tangential_root_is_found_even_though_nothing_brackets_it() {
+  // Acceptance 10b. A double root touches zero without crossing, so `G` never
+  // changes sign and no bracket exists at any grid resolution. This is the one
+  // case a sign-change scan provably cannot see.
+  //
+  // `[x₀², -2x₀, 1]` has the double root `x = x₀`, i.e. `u = -ln(x₀)`.
+  for u0 in [
+    0.0f64,   // lands exactly on a grid node - the easy case
+    0.005,    // mid-cell in the dense band
+    -0.003,   //
+    3.141_59, // nowhere near a node
+    -4.567, 7.5, // just outside the dense band, where the step widens to 0.5
+  ] {
+    let x0 = (-u0).exp();
+    let amounts = vec![x0 * x0, -2.0 * x0, 1.0];
+    let dates = vec![
+      DateLike::from_str("2015-01-01").unwrap(),
+      DateLike::from_str("2016-01-01").unwrap(),
+      DateLike::from_str("2016-12-31").unwrap(),
+    ];
+
+    let rate = u0.exp_m1();
+    let residual = xnpv(rate, &dates, &amounts, None).unwrap();
+    let gross: f64 = amounts.iter().map(|a| a.abs()).sum();
+    assert!(
+      residual.abs() <= 1e-9 * gross.max(1.0),
+      "u0 {u0}: the constructed root is not one - |XNPV| = {residual:e}"
+    );
+
+    let reported = xirr_all_roots(&dates, &amounts, None).unwrap();
+    assert!(
+      found(&reported, rate),
+      "u0 {u0}: double root at r = {rate:e} not reported; got {reported:?}"
+    );
+
+    let outcome = xirr_outcome(&dates, &amounts, None, None, None).unwrap();
+    assert!(
+      outcome.rate().is_some(),
+      "u0 {u0}: no rate at all, got {outcome:?}"
+    );
+  }
+}
+
+#[test]
+fn xirr_and_the_enumeration_agree_on_even_sign_changes() {
+  // The existing agreement test walks `SOLVABLE`, a one-parameter family that
+  // never produces a close root pair. This is the same contract - any rate
+  // `xirr` produces must appear in the enumeration - over the case that
+  // family does not reach.
+  let mut rng = Rng(0x0DDB_A11_5EED_0002);
+  let mut checked = 0usize;
+
+  for _ in 0..300 {
+    let u1 = rng.uniform(-6.0, 6.0);
+    // Gaps wide enough that the two roots are genuinely distinguishable. This
+    // test is about *agreement* between the two entry points, and a pair
+    // closer than this is a near-double root where the curve is flat enough
+    // that Phase 1's weak convergence test stops measurably short of Brent's
+    // answer - real ill-conditioning, not disagreement, and already pinned by
+    // `a_cancelling_flow_is_stable_to_its_own_conditioning_and_no_better`.
+    // Sub-cell gaps are covered by the existence test above, which is the
+    // property that actually matters there.
+    let (dates, amounts, _) = flow_with_roots(u1, u1 + rng.uniform(0.05, 0.5));
+    if sign_changes(&dates, &amounts, None).unwrap() != 2 {
+      continue;
+    }
+
+    let rate = xirr(&dates, &amounts, None, None, None).unwrap();
+    if !rate.is_finite() {
+      continue;
+    }
+    let roots = xirr_all_roots(&dates, &amounts, None).unwrap();
+    checked += 1;
+
+    // Compared in `u = ln(1 + r)`, for the same reason `DISTINCT_ROOT_U_TOL`
+    // exists: a fixed step in `u` is a fixed *relative* step in `1 + r`, so
+    // the comparison means the same thing at `r = 0.05` and at `r = 125`.
+    // It also has to: these flows are built with roots as close as 1e-3 apart
+    // in `u`, and near a near-double root the curve is flat enough that
+    // Newton in rate space and Brent in log-rate space legitimately stop on
+    // different floats. The module docs already say `selected` need not be
+    // bit-identical to its counterpart in `all`.
+    let separation = |root: f64| (root.ln_1p() - rate.ln_1p()).abs();
+    let closest = roots
+      .iter()
+      .map(|r| separation(*r))
+      .fold(f64::INFINITY, f64::min);
+    assert!(
+      closest < 1e-6,
+      "xirr returned {rate:e} (u = {:.9}), nearest enumerated root is \
+       {closest:e} away in u\n  enumeration {roots:?}\n  amounts {amounts:?}",
+      rate.ln_1p()
+    );
+  }
+
+  assert!(checked > 100, "only {checked} flows exercised the property");
+  println!("xirr/enumeration agreement on even sign changes: {checked} flows");
+}
+
+#[test]
+fn three_roots_in_one_cell_still_yield_a_rate_even_though_enumeration_is_short() {
+  // The documented boundary of the turning-point mechanism, pinned so it is a
+  // measured limit rather than a claim in a document.
+  //
+  // A *pair* inside one cell is found: the curve turns once between them, so
+  // `G'` takes opposite signs at the two nodes straddling the cell. Three
+  // roots turn it twice, `G'` returns to the sign it started with, and the
+  // derivative scan misses them exactly as the value scan does.
+  //
+  // What must not regress is the weaker but more important promise: `xirr`
+  // still returns a genuine rate. This asserts that, and the width at which
+  // enumeration becomes complete, without asserting the shortfall itself -
+  // fixing the gap should not fail this test.
+  let cubic = |us: [f64; 3]| {
+    let [x1, x2, x3] = us.map(|u: f64| (-u).exp());
+    // (x - x1)(x - x2)(x - x3); the coefficient of xⁱ is the payment at δ = i.
+    let amounts = vec![
+      -x1 * x2 * x3,
+      x1 * x2 + x1 * x3 + x2 * x3,
+      -(x1 + x2 + x3),
+      1.0,
+    ];
+    let dates = vec![
+      DateLike::from_str("2015-01-01").unwrap(),
+      DateLike::from_str("2016-01-01").unwrap(),
+      DateLike::from_str("2016-12-31").unwrap(),
+      DateLike::from_str("2017-12-31").unwrap(),
+    ];
+    (dates, amounts)
+  };
+
+  // Spread across two dense-band cells: all three are enumerated.
+  let (dates, amounts) = cubic([1.00, 1.01, 1.02]);
+  let roots = xirr_all_roots(&dates, &amounts, None).unwrap();
+  assert_eq!(
+    roots.len(),
+    3,
+    "three roots one cell apart should all be found, got {roots:?}"
+  );
+
+  // Packed into one cell: the enumeration is allowed to come up short, but a
+  // rate must still be returned and it must be a real root.
+  let (dates, amounts) = cubic([1.000, 1.004, 1.008]);
+  let rate = xirr(&dates, &amounts, None, None, None).unwrap();
+  assert!(
+    rate.is_finite(),
+    "no rate at all for three tightly clustered roots"
+  );
+  let residual = xnpv(rate, &dates, &amounts, None).unwrap().abs();
+  assert!(
+    residual <= residual_budget(rate, &dates, &amounts),
+    "returned {rate:e} with residual {residual:e}, which is not a root"
+  );
+}

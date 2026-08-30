@@ -50,9 +50,9 @@ regression. Say so and stop.
 
 ## Safe to change
 
-- Anything in `CashFlow::solve_robustly` and `CashFlow::roots` (Phase 2). These
-  only run where a spreadsheet already returned `#NUM!`, so they can add an
-  answer but never change one.
+- Anything in `CashFlow::solve_robustly`, `CashFlow::roots` and
+  `CashFlow::turning_points` (Phase 2). These only run where a spreadsheet
+  already returned `#NUM!`, so they can add an answer but never change one.
 - `log_rate_grid` band widths and step sizes, `FALLBACK_SEEDS`,
   `FALLBACK_LOG_SEEDS`. The log-rate **bounds** are not tuning knobs: they are
   `ln(2^-53)` and `ln(f64::MAX)`, i.e. the range an `f64` rate can express, and
@@ -69,7 +69,8 @@ regression. Say so and stop.
 ```
 crates/core/src/scheduled/xirr.rs   the algorithm + all XIRR tolerances
 crates/core/src/optimize.rs         root finders (Newton, Brent, bracketing)
-crates/core/tests/robust_solver.rs  existence, reachability, typed outcomes
+crates/core/tests/robust_solver.rs  existence, reachability, typed outcomes,
+                                    and the even-sign-change property tests
 crates/core/tests/determinism.rs    cross-platform reference rates
 crates/core/tests/fixtures/         parity snapshot captured from 473b9ff
 crates/core/src/utils.rs            shared helpers for the non-XIRR paths

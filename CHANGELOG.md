@@ -103,8 +103,20 @@ The return type is now an unsigned count.
   and refined with Brent.
 - `MIN_SEARCHED_LOG_RATE` / `MAX_SEARCHED_LOG_RATE` and a test asserting they
   equal `ln(2⁻⁵³)` and `ln(f64::MAX)`.
+- **Turning-point refinement.** The log-rate search now also brackets `G'` and
+  feeds the resulting extrema back into the grid before looking for roots.
+  Between two roots the curve must turn, and a double root *is* a turning
+  point, so this reaches both ways a pair of roots can hide from a sign-change
+  scan: sitting inside one grid cell, or touching zero without crossing it.
+  Near-free — `scaled_g` already returned the derivative alongside the value,
+  and the robust path measures 3.27 ms/call against 3.28 before.
 - Property test: 1,282 generated flows with exactly one netted sign change, all
   solved.
+- Property tests for an **even** number of sign changes — the case with no
+  existence proof behind it — validated against a brute-force scan implemented
+  in the test file at ten times the solver's own resolution, sharing no search
+  code with the library. Three of them: pairs inside one grid cell, tangential
+  double roots, and agreement between `xirr` and `xirr_all_roots`.
 - Parity regression snapshot, 445 rows of raw `f64` bit patterns captured from
   commit `473b9ff`.
 
@@ -132,6 +144,39 @@ The return type is now an unsigned count.
 - **Underflow could be read as a root.** At large `u` every discount factor
   underflows to `0.0` and a naive `G` evaluates to `0.0`. The objective is now
   scaled by its dominant term, so `G(u) == 0.0` can only mean real cancellation.
+- **Two roots inside one grid cell were both missed**, and so was every
+  tangential (double) root. A sign-change scan cannot see either: in the first
+  case `G` carries the same sign at both nodes straddling the pair, and in the
+  second it never changes sign at all. Over 2,113 generated two-root flows,
+  `xirr_all_roots` returned something for 73.1% of them and disagreed with
+  `xirr` on 567; both figures are now 100% and 0. Fixed by the turning-point
+  refinement above.
+
+### Known limitations
+
+Two constructions still defeat the enumeration. In both, `xirr` returns a
+genuine rate and `xirr_all_roots` is short — which also means `status` reads
+`Root` where it should read `MultipleRoots`, reporting an ambiguity as a single
+answer.
+
+- **Three or more roots inside one grid cell.** A pair is found because the
+  curve turns once between them and `G'` therefore takes opposite signs at the
+  two nodes straddling the cell. Three roots turn the curve twice, so `G'`
+  returns to its original sign and the derivative scan misses them exactly as
+  the value scan does. Verified: roots at `u = 1.000, 1.004, 1.008` enumerate as
+  one; the same three at `u = 1.000, 1.010, 1.020` — one cell wider — enumerate
+  as three. Fixing it means recursing on `G''`, which buys one more root per
+  level and never closes; not worth the machinery until a real cash flow
+  produces one.
+- **A tangential root between two simple roots.** The turning point is
+  suppressed there, because in every other configuration a turning point
+  between two found roots is the extremum of a pair rather than a root, and
+  reporting it would invent a third root in the middle of every near-double
+  pair. Needs four or more sign changes.
+
+The even-sign-change case as a whole remains **evidence, not proof**. The odd
+case is proved by the domain-spanning bracket; nothing equivalent exists when
+roots come in pairs.
 
 ### Unchanged — and deliberately so
 

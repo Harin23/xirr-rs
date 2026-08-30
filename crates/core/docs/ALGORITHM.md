@@ -275,6 +275,75 @@ carry it. Nothing downstream needs to know.
 than a sign change, because `f64::signum` reports `+1.0` for `0.0` and a naive
 `signum` comparison manufactures a bracket wherever the function touches zero.
 
+### Turning points: the even-sign-change case
+
+Everything above finds roots by looking for sign changes, which settles the odd
+case completely — opposite signs at the two domain limits mean a bracket must
+exist. It says nothing about the even case, where roots come in pairs, and a
+pair is invisible to a sign-change scan in two ways:
+
+1. **Both roots inside one grid cell.** `G` carries the same sign at the two
+   nodes straddling them, so no bracket is reported. The dense band steps
+   `0.01` in `u`, so any pair closer than that is at risk.
+2. **A tangential (double) root.** The curve touches zero and comes back. `G`
+   never changes sign anywhere, so no bracket exists at any resolution — this
+   one cannot be fixed by refining the grid.
+
+One observation covers both: **between two roots `G'` must change sign, and at
+a double root `G'` is zero.** So every root a scan of `G` can miss has a turning
+point at or between the pair, and `G'` does change sign there even where `G`
+does not.
+
+`CashFlow::turning_points` brackets `G'` on the same grid, refines each with
+Brent, and the results are merged into the grid before roots are sought. Case 1
+then splits into two ordinary brackets. Case 2 has no bracket to produce, so the
+turning points are additionally offered as root candidates — `is_root` decides,
+using the tolerance that already gates every other candidate. No new tolerance
+is introduced.
+
+Nearly free: `scaled_g` already computed the derivative alongside the value and
+discarded it, so only the refinement is new work. Measured 3.27 ms/call on the
+hardest case in the corpus, against 3.28 before.
+
+**A turning point straddled by two roots that were already found is not
+offered.** Between two simple roots the turning point is the extremum of the
+pair, not a root — and when the pair is very close together the curve is flat
+enough that the extremum passes the residual test too, so offering it would
+report a third root in the middle of every near-double pair. The roots already
+found are the only reliable witness here; comparing the signs at neighbouring
+grid nodes does not work, because the pair can be narrower than one cell, which
+is the case this whole mechanism exists for.
+
+> ⚠️ **Known gap 1.** That suppression rule also hides a tangential root lying
+> *between* two simple roots. It needs four or more sign changes and a curve
+> that grazes zero exactly between two crossings. `xirr` still answers such a
+> flow; only `xirr_all_roots` is short by one. Distinguishing the two would need
+> a multiplicity test — checking `G'` at the candidate — which is left for when
+> a real cash flow produces one.
+
+> ⚠️ **Known gap 2: three or more roots inside one cell.** The mechanism above
+> handles a *pair* because the curve turns once between them, so `G'` takes
+> opposite signs at the two nodes straddling the cell and brackets there. Three
+> roots turn the curve twice, `G'` comes back to the sign it started with, and
+> the derivative scan misses them exactly as the value scan does.
+>
+> Verified: `u = 1.000, 1.004, 1.008` (one dense-band cell) enumerates as one
+> root; the same three at `u = 1.000, 1.010, 1.020` enumerate as three. The
+> coarse bands make it likelier in principle — the low band steps `0.25` — but
+> also require three IRRs within a fraction of a percent of each other near
+> total loss.
+>
+> The obvious extension is to recurse: bracket `G''` to separate the turning
+> points, then `G'''`, and so on. Each level buys one more root per cell and the
+> recursion never closes, so it is not implemented. The practical consequence is
+> that `XirrOutcome` reports `Root` where it should report `MultipleRoots` —
+> an ambiguity presented as a single answer, which is the failure mode this
+> library exists to prevent, so it is worth revisiting if a real flow hits it.
+
+The even case is therefore **thorough but unproved**, and the distinction is
+worth keeping in mind: `a_single_sign_change_always_yields_a_root` verifies a
+theorem, whereas the section-10 tests measure a construction.
+
 ---
 
 ## 5c. Typed outcomes
@@ -362,7 +431,7 @@ Three layers, all required:
 | ---------- | -------------------------------------------------------- | ----------------------------------------------- |
 | Unit       | `#[cfg(test)]` in each module                            | Individual functions                            |
 | Edge cases | `crates/core/tests/edge_cases.rs`                        | Validation, numeric extremes, policy invariants |
-| Robust     | `crates/core/tests/robust_solver.rs`                     | Existence, reachability, typed outcomes, perf   |
+| Robust     | `crates/core/tests/robust_solver.rs`                     | Existence, reachability, typed outcomes, perf, and the even-sign-change property tests (§10) |
 | Golden     | `crates/core/tests/golden.rs`, `__test__/golden.spec.ts` | Spreadsheet parity                              |
 | Binding    | `__test__/edge-cases.spec.ts`                            | Date marshalling, null vs throw, typed arrays   |
 
@@ -404,6 +473,10 @@ the napi layer shows up as one suite passing and the other failing.
    `r` near `-1` over long horizons. `u` is bounded, so neither happens.
 6. **A tolerance must be relative to the quantity it measures.** Not to the
    input, not to a constant. This has now been the root cause twice.
-5. **If you add cases to the corpus**, regenerate expectations from a
+7. **If you add cases to the corpus**, regenerate expectations from a
    spreadsheet, not from this code. A golden file derived from the
    implementation tests nothing.
+8. **A reference used by a test must not come from the solver.** The
+   section-10 tests build flows whose roots are known by factorisation and
+   check them against a brute-force scan written out in the test file. A test
+   that asks the search to confirm itself proves nothing.

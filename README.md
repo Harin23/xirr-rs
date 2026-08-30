@@ -221,6 +221,60 @@ places the default policy answers.
 
 ---
 
+## What is actually guaranteed
+
+Two different promises, and it is worth knowing which one you are relying on.
+
+**If a spreadsheet returns a rate, so does this package — the same one.** That
+is structural rather than empirical: the spreadsheet iteration always runs
+first, and under the default policy its result is returned unchanged. The
+robust path is only reachable once that iteration has given up, so it can add
+an answer but can never alter one.
+
+**If a root exists, this package finds it** — proved for an odd number of sign
+changes, and thorough but unproved for an even number:
+
+| Netted sign changes | Guarantee                                                                 |
+| ------------------- | ------------------------------------------------------------------------- |
+| `0`                 | **Proved**: no root exists. Reported as `noRootExists`.                    |
+| odd (`1, 3, …`)     | **Proved**: a root is found, or it is not representable as an `f64`.       |
+| even (`2, 4, …`)    | Not proved. Roots come in pairs, and a pair can hide between two points the search looks at, or touch zero without crossing it. |
+
+The odd case is a real proof. `XNPV` takes opposite signs at the two ends of
+the searched domain, the search spans that whole domain, so a bracket must
+exist and bisection cannot fail. Failure then means the root is outside what an
+`f64` can express — reported as `didNotConverge`, never as "no IRR".
+
+The even case has no such argument available, so it is handled by construction
+instead: the search also locates the turning points of the curve and looks
+there. Between any two roots the curve must turn, and a root that touches zero
+without crossing is itself a turning point — so both ways a pair can hide are
+covered. Measured over 2,113 generated cash flows built to have two roots at
+known positions, including pairs closer together than the search grid's own
+spacing, every root was found. That is evidence, not a proof.
+
+### Where it still under-reports
+
+Two constructions are known to defeat the enumeration. Both need roots packed
+far more tightly than any cash flow we have seen in practice, and in both
+`xirr` still returns a genuine rate — it is `xirrAllRoots` that comes up short,
+and with it the `multipleRoots` status:
+
+- **Three or more roots between two adjacent search points.** Two are handled,
+  because the curve turns once between them and that turn is detectable. Three
+  turn twice, which is not. In the dense band this needs three IRRs within
+  about 1% of each other.
+- **A tangential root lying between two ordinary roots.** Needs at least four
+  sign changes and a curve that grazes zero exactly between two crossings.
+
+The consequence worth knowing: in those cases `status` reads `root` rather than
+`multipleRoots`, so an ambiguity is reported as a single answer. If your inputs
+can plausibly contain several IRRs within a percent of one another, treat
+`signChanges()` as the authority on how many roots are possible rather than the
+length of `roots`.
+
+---
+
 ## Root policies
 
 ```js
