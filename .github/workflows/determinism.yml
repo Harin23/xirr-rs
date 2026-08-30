@@ -51,6 +51,12 @@ jobs:
       # The whole core suite, not just the determinism file: the parity
       # snapshot and the property test are equally platform-sensitive, and a
       # divergence in either is the same class of problem.
+      #
+      # The parity snapshot holds bit-exactly only on the platform it was
+      # recorded on (linux-glibc); elsewhere it allows a documented ULP budget,
+      # for the same libm reason described above. See `PARITY_ULP_BUDGET` in
+      # `crates/core/tests/robust_solver.rs`, which carries the per-platform
+      # divergence table this job is what keeps honest.
       - name: Core test suite
         run: cargo test -p xirr-core --release
 

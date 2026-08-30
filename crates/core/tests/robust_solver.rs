@@ -333,13 +333,105 @@ fn a_cancelling_flow_is_stable_to_its_own_conditioning_and_no_better() {
 // 7. The parity regression gate
 // ===========================================================================
 
+/// The platform the snapshot was recorded on, where bit-identity is required.
+///
+/// `target_env` matters: musl ships its own libm, so an x86-64 Linux musl
+/// build is no more the recording platform than macOS is.
+const SNAPSHOT_PLATFORM: bool = cfg!(all(
+  target_arch = "x86_64",
+  target_os = "linux",
+  target_env = "gnu"
+));
+
+/// How far the compat rate may move between libm implementations before it
+/// stops being a rounding difference and becomes a parity break.
+///
+/// `exp`, `ln`, `expm1` and `powf` are not bit-specified by IEEE 754, so the
+/// final Brent iterate is free to land a few ULP apart on different libms.
+/// Observed across the 445 snapshot rows, recorded per the instruction in
+/// `determinism.rs` - name the platform, do not widen until it passes:
+///
+/// | platform             | max divergence |
+/// | -------------------- | -------------- |
+/// | linux x86-64 glibc   | 0 ULP (exact)  |
+/// | macos aarch64        | 5 ULP          |
+/// | windows x86-64 msvc  | 0 ULP (exact)  |
+///
+/// 16 ULP is about `2e-15` relative at these magnitudes: four orders tighter
+/// than `CROSS_PLATFORM_REL_TOL` in `determinism.rs`, and far below the
+/// orders of magnitude a real parity break - a different root selected, a
+/// changed policy - moves the answer. Bit-identity is still required on the
+/// recording platform, so this budget only applies where libm genuinely
+/// differs.
+const PARITY_ULP_BUDGET: u64 = 16;
+
+/// Number of representable `f64` values between `a` and `b`.
+fn ulp_distance(a: f64, b: f64) -> u64 {
+  // Map each f64 onto an i64 that sorts the same way, so subtraction counts
+  // representable values and crossing zero is not a discontinuity.
+  fn ordered(x: f64) -> i64 {
+    let bits = x.to_bits() as i64;
+    if bits < 0 {
+      i64::MIN.wrapping_sub(bits)
+    } else {
+      bits
+    }
+  }
+  ordered(a).wrapping_sub(ordered(b)).unsigned_abs()
+}
+
+/// Pins `ulp_distance` against the divergence actually observed on
+/// macos-arm64, so the budget above is checked by something executable rather
+/// than by a comment.
+///
+/// These four pairs are the CI failure that motivated the budget, verbatim.
+/// The parity test's tolerant branch does not run on the recording platform,
+/// so without this the helper would ship untested from Linux.
+#[test]
+fn the_ulp_helper_measures_the_observed_macos_divergence() {
+  // (got on macos-arm64, want from the snapshot, ULP apart)
+  for (got, want, expected) in [
+    (0x3fd3_23ef_f332_0b09u64, 0x3fd3_23ef_f332_0b0cu64, 3u64),
+    (0x3f8a_7f34_7ed5_8212, 0x3f8a_7f34_7ed5_8217, 5),
+    (0xbfd0_9f93_ac90_a61c, 0xbfd0_9f93_ac90_a61b, 1),
+    (0xbfce_f0c6_3bdc_c526, 0xbfce_f0c6_3bdc_c524, 2),
+  ] {
+    let (got, want) = (f64::from_bits(got), f64::from_bits(want));
+    assert_eq!(ulp_distance(got, want), expected, "{got:?} vs {want:?}");
+    assert_eq!(ulp_distance(want, got), expected, "not symmetric");
+    assert!(
+      expected <= PARITY_ULP_BUDGET,
+      "budget no longer covers macOS"
+    );
+  }
+
+  // Crossing zero must not read as a huge jump, and a value must be zero ULP
+  // from itself. Both signs of zero are the same number here.
+  assert_eq!(ulp_distance(0.0, -0.0), 0);
+  assert_eq!(ulp_distance(0.299, 0.299), 0);
+  // The smallest subnormal either side of zero is two representable values
+  // apart, not the 2^53 a naive sign-magnitude subtraction would report.
+  // `MIN_POSITIVE` would be wrong here: it is the smallest *normal*, so every
+  // subnormal still sits between it and its negation.
+  let tiny = f64::from_bits(1);
+  assert_eq!(ulp_distance(tiny, -tiny), 2);
+}
+
 /// `SpreadsheetCompat` output must be **bit-identical** to commit `473b9ff`
-/// for every golden case and every guess in the snapshot.
+/// for every golden case and every guess in the snapshot, on the platform the
+/// snapshot was recorded on - and within `PARITY_ULP_BUDGET` everywhere else.
 ///
 /// The fixture was produced by running the pre-change implementation, not by
 /// running this one, so it cannot drift with the code it protects. Raw `f64`
 /// bit patterns rather than decimal, because a decimal round-trip would hide
 /// exactly the one-ULP divergences that break parity on multiple-root flows.
+///
+/// Bit-identity is not assertable across platforms - see `PARITY_ULP_BUDGET`
+/// and the module doc of `determinism.rs` for why demanding it would be
+/// asserting a promise neither the language nor the hardware makes. A `NaN`
+/// row is exempt from the budget and must stay `NaN`: reproducing `#NUM!` is
+/// the point of those rows, and a `NaN` that became a number is a behaviour
+/// change rather than a rounding difference.
 #[test]
 fn spreadsheet_compat_is_unchanged_from_473b9ff() {
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -360,6 +452,7 @@ fn spreadsheet_compat_is_unchanged_from_473b9ff() {
 
   let mut checked = 0usize;
   let mut divergences = Vec::new();
+  let mut tolerated = 0u64;
 
   for line in snapshot.lines().skip(1).filter(|l| !l.trim().is_empty()) {
     let f: Vec<&str> = line.trim_end_matches('\r').split(',').collect();
@@ -379,11 +472,26 @@ fn spreadsheet_compat_is_unchanged_from_473b9ff() {
     .unwrap();
 
     checked += 1;
-    if got.to_bits() != want_bits {
+    if got.to_bits() == want_bits {
+      continue;
+    }
+
+    let want = f64::from_bits(want_bits);
+    let drift = if got.is_nan() && want.is_nan() {
+      0 // a differing NaN payload is not a differing answer
+    } else if got.is_finite() && want.is_finite() {
+      ulp_distance(got, want)
+    } else {
+      u64::MAX // NaN <-> number, or an infinity appearing: a real change
+    };
+
+    if SNAPSHOT_PLATFORM || drift > PARITY_ULP_BUDGET {
       divergences.push(format!(
-        "{id} guess={guess_field}: {got:?} (0x{:016x}), was 0x{want_bits:016x}",
+        "{id} guess={guess_field}: {got:?} (0x{:016x}), was 0x{want_bits:016x} ({drift} ULP)",
         got.to_bits()
       ));
+    } else {
+      tolerated = tolerated.max(drift);
     }
   }
 
@@ -394,6 +502,12 @@ fn spreadsheet_compat_is_unchanged_from_473b9ff() {
     divergences.len(),
     divergences.join("\n  ")
   );
+  // Printed so the budget table above can be kept honest on a new platform.
+  if tolerated > 0 {
+    println!(
+      "libm divergence tolerated: {tolerated} ULP over {checked} rows (budget {PARITY_ULP_BUDGET})"
+    );
+  }
 }
 
 #[test]
