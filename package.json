@@ -2,7 +2,7 @@
   "name": "xirr-rs",
   "version": "0.2.0",
   "description": "rust based xirr for nodejs",
-  "main": "index.js",
+  "main": "binding.js",
   "types": "index.d.ts",
   "repository": {
     "url": "https://github.com/Harin23/xirr-rs.git",
@@ -22,9 +22,12 @@
     "native"
   ],
   "files": [
-    "index.d.ts",
+    "binding.js",
+    "platform.js",
+    "postinstall.js",
+    "checksums.json",
     "index.js",
-    "*.node",
+    "index.d.ts",
     "README.md",
     "LICENSE"
   ],
@@ -48,6 +51,7 @@
     "access": "public"
   },
   "scripts": {
+    "postinstall": "node postinstall.js",
     "bench": "node --import @oxc-node/core/register benchmark/bench.ts",
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",

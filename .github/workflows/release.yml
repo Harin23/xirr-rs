@@ -1,23 +1,26 @@
 name: Release
 
+# Releases are cut by pushing a tag:
+#
+#     npm version 0.3.0 && git push --follow-tags
+#
+# The tag must match package.json; the first job refuses to continue otherwise.
+#
+# Order matters here. The GitHub release is created *before* npm publish, and a
+# real install is proven against it in between, because the npm package is
+# useless until its binaries are downloadable. Publishing npm first would leave
+# a window where `npm install xirr-rs` resolves and then fails at postinstall.
+
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
-      publish:
-        description: 'Publish to npm'
+      dry_run:
+        description: 'Build and stage a draft release; do not verify or publish to npm'
         type: boolean
-        default: false
-  push:
-    branches:
-      - main
-    tags-ignore:
-      - '**'
-    paths-ignore:
-      - '**/*.md'
-      - LICENSE
-      - '**/*.gitignore'
-      - .editorconfig
-      - docs/**
+        default: true
 
 concurrency:
   group: release-${{ github.ref }}
@@ -26,69 +29,334 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  APP_NAME: xirr-rs
+
 jobs:
   build:
     uses: ./.github/workflows/build.yml
 
-  publish:
-    name: Publish
+  release:
+    name: GitHub release
     runs-on: ubuntu-latest
-    needs:
-      - build
+    needs: [build]
     permissions:
-      contents: read
-      id-token: write
+      contents: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v7
-      - name: setup pnpm
-        uses: pnpm/action-setup@v6
-      - name: Setup node
-        uses: actions/setup-node@v7
         with:
-          node-version: 22
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Download all artifacts
+          fetch-depth: 0
+
+      - name: Resolve version, and refuse a tag that disagrees with package.json
+        id: meta
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          dry_run=false
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${GITHUB_REF_NAME}"
+            if [ "$tag" != "v$version" ]; then
+              echo "::error::tag $tag does not match package.json version $version"
+              exit 1
+            fi
+          else
+            tag="v$version"
+            dry_run="${{ inputs.dry_run }}"
+          fi
+
+          # A prerelease version (0.3.0-rc.1) marks the GitHub release as a
+          # prerelease and goes to npm under the `next` dist-tag, not `latest`.
+          case "$version" in
+            *-*) prerelease=true ;;
+            *)   prerelease=false ;;
+          esac
+
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+            echo "dry_run=$dry_run"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Releasing $tag (prerelease=$prerelease, dry_run=$dry_run)"
+
+      - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
           path: artifacts
-      - name: Flatten binaries into package root
-        run: find artifacts -name '*.node' -exec cp -f {} . \;
-        shell: bash
-      - name: Verify every target is present
+
+      - name: Collect binaries and require every target
         run: |
-            missing=0
-            for t in darwin-arm64 darwin-x64 linux-x64-gnu linux-x64-musl \
-                     linux-arm64-gnu linux-arm64-musl win32-x64-msvc; do
-              if [ ! -f "xirr-rs.$t.node" ]; then
-                echo "::error::missing xirr-rs.$t.node"; missing=1
-              fi
-            done
-            ls -la *.node
-            exit $missing
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -name '*.node' -exec cp -f {} dist/ \;
+
+          missing=0
+          for target in darwin-arm64 darwin-x64 linux-arm64-gnu linux-arm64-musl \
+                        linux-x64-gnu linux-x64-musl win32-x64-msvc; do
+            if [ ! -f "dist/${APP_NAME}.${target}.node" ]; then
+              echo "::error::missing ${APP_NAME}.${target}.node"
+              missing=1
+            fi
+          done
+          ls -la dist
+          exit $missing
+
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.node > SHASUMS256.txt
+          cat SHASUMS256.txt
+
+          # checksums.json travels inside the npm tarball, so postinstall can
+          # verify a download without trusting a second network fetch.
+          node -e '
+            const fs = require("node:fs")
+            const manifest = {}
+            for (const line of fs.readFileSync("SHASUMS256.txt", "utf8").trim().split("\n")) {
+              const [hash, file] = line.split(/\s+/)
+              manifest[file.replace(/^\*/, "")] = hash
+            }
+            fs.writeFileSync("../checksums.json", JSON.stringify(manifest, null, 2) + "\n")
+          '
+          cat ../checksums.json
+
+      - name: Hand checksums.json to the publish job
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-checksums
+          path: checksums.json
+          if-no-files-found: error
+
+      - name: Build release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+
+          # Prefer the CHANGELOG section for this version; fall back to
+          # GitHub's generated notes when there is no changelog entry.
+          if [ -f CHANGELOG.md ]; then
+            awk -v v="$version" '
+              $0 ~ "^## \\[" v "\\]" { found = 1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' CHANGELOG.md > notes.md
+          fi
+
+          if [ -s notes.md ]; then
+            echo "Using CHANGELOG.md section for $version"
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No CHANGELOG.md entry for $version, generating notes from commits"
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo ""
+            echo "### Install"
+            echo ""
+            echo '```sh'
+            echo "npm install ${APP_NAME}@${version}"
+            echo '```'
+            echo ""
+            echo "The npm package downloads the binary below that matches your platform."
+            echo "\`SHASUMS256.txt\` covers every asset."
+          } >> notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+
+          args=(--title "$tag" --notes-file notes.md)
+          if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          if [ "${{ steps.meta.outputs.dry_run }}" = "true" ]; then
+            args+=(--draft)
+          fi
+
+          # Re-running a failed release should update the existing one rather
+          # than fall over on "already exists". `gh release edit` has no
+          # --generate-notes, so that flag is only used on first creation.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" "${args[@]}"
+            gh release upload "$tag" dist/* --clobber
+          else
+            if [ "${{ steps.notes.outputs.generate }}" = "true" ]; then
+              args+=(--generate-notes)
+            fi
+            gh release create "$tag" "${args[@]}" dist/*
+          fi
+
+          gh release view "$tag"
+
+  # Proves the whole install path against the release that was just published:
+  # postinstall picks a triple, downloads it, verifies the checksum, and the
+  # module loads. A failure here stops the npm publish below.
+  verify-install:
+    name: Verify install on ${{ matrix.label }}
+    needs: [release]
+    if: ${{ needs.release.outputs.dry_run != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x64-gnu
+            os: ubuntu-latest
+          - label: linux-arm64-gnu
+            os: ubuntu-24.04-arm
+          - label: darwin-x64
+            os: macos-13
+          - label: darwin-arm64
+            os: macos-latest
+          - label: win32-x64-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Restore checksums.json
+        uses: actions/download-artifact@v8
+        with:
+          name: package-checksums
+          path: .
+
+      - name: Pack the tarball npm would publish
+        run: npm pack --pack-destination "$RUNNER_TEMP"
         shell: bash
-      - name: Verify tarball contents
+
+      - name: Install it into a clean project
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          npm init -y > /dev/null
+          npm install "$RUNNER_TEMP"/xirr-rs-*.tgz
+        shell: bash
+
+      - name: Load the module and run one calculation
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/consumer"
+          node -e "
+            const { xirr } = require('xirr-rs')
+            if (typeof xirr !== 'function') {
+              throw new Error('xirr is not exported')
+            }
+            console.log('loaded ${{ matrix.label }} ok')
+          "
+        shell: bash
+
+  verify-install-musl:
+    name: Verify install on ${{ matrix.label }}
+    needs: [release]
+    if: ${{ needs.release.outputs.dry_run != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x64-musl
+            os: ubuntu-latest
+          - label: linux-arm64-musl
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Restore checksums.json
+        uses: actions/download-artifact@v8
+        with:
+          name: package-checksums
+          path: .
+
+      - name: Pack the tarball npm would publish
+        run: npm pack --pack-destination "$GITHUB_WORKSPACE/pack"
+        shell: bash
+
+      - name: Install and load under musl
+        uses: tj-actions/docker-run@v2
+        with:
+          image: node:22-alpine
+          name: verify-musl
+          options: '-v ${{ github.workspace }}:${{ github.workspace }} -w ${{ github.workspace }}'
+          args: >-
+            sh -c "mkdir -p /consumer && cd /consumer && npm init -y > /dev/null &&
+            npm install ${{ github.workspace }}/pack/xirr-rs-*.tgz &&
+            node -e \"const { xirr } = require('xirr-rs'); if (typeof xirr !== 'function') throw new Error('xirr is not exported'); console.log('loaded ${{ matrix.label }} ok')\""
+
+  publish-npm:
+    name: Publish to npm
+    needs: [release, verify-install, verify-install-musl]
+    if: ${{ needs.release.outputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/xirr-rs
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Restore checksums.json
+        uses: actions/download-artifact@v8
+        with:
+          name: package-checksums
+          path: .
+
+      - name: Show what will be published
         run: npm pack --dry-run
-        shell: bash
+
+      - name: Refuse to publish a tarball carrying binaries
+        run: |
+          set -euo pipefail
+          # Binaries belong on the GitHub release, not in the npm package. If
+          # one leaks in, the tarball silently grows by megabytes per platform.
+          if npm pack --dry-run --json | node -e "
+            const chunks = []
+            process.stdin.on('data', (c) => chunks.push(c))
+            process.stdin.on('end', () => {
+              const files = JSON.parse(chunks.join(''))[0].files.map((f) => f.path)
+              const leaked = files.filter((f) => f.endsWith('.node'))
+              if (leaked.length) {
+                console.error('::error::.node files in tarball: ' + leaked.join(', '))
+                process.exit(1)
+              }
+            })
+          "; then
+            echo "No binaries in the tarball."
+          else
+            exit 1
+          fi
+
       - name: Publish
         run: |
-          npm config set provenance true
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ];
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --access public
-          elif git log -1 --pretty=%B | grep "^v\?[0-9]\+\.[0-9]\+\.[0-9]\+$";
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --access public
-          elif git log -1 --pretty=%B | grep "^v\?[0-9]\+\.[0-9]\+\.[0-9]\+";
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --tag next --access public
+          set -euo pipefail
+          if [ "${{ needs.release.outputs.prerelease }}" = "true" ]; then
+            npm publish --provenance --access public --tag next
           else
-            echo "Not a release, skipping publish"
+            npm publish --provenance --access public
           fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
