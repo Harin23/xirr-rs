@@ -1,34 +1,61 @@
 name: Release
 
-# To cut a release: bump the version, merge it, then tag the merge commit.
+# Every push to main runs release-please. Usually it just opens or updates a
+# "chore: release x.y.z" PR and stops there.
 #
-#     npm version 0.3.0
-#     git push --follow-tags
-#
-# npm resolves the right binary for each user through optionalDependencies, so
-# there is nothing to download at install time and nothing to verify here.
+# Merging that PR makes release-please tag the commit and create the GitHub
+# release, which flips release_created to true. Only then do build and publish
+# run — and they must run HERE, because a tag pushed with GITHUB_TOKEN never
+# starts a workflow of its own.
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  release-please:
+    name: Release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # tag + release
+      pull-requests: write # the release PR
+      issues: write # labels on that PR
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   build:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
     uses: ./.github/workflows/build.yml
 
   publish:
     name: Publish
-    needs: build
+    needs: [release-please, build]
+    if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write # napi prepublish creates the GitHub release
+      contents: read
       id-token: write # npm provenance
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - uses: pnpm/action-setup@v6
 
@@ -38,11 +65,11 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - name: Check the tag matches package.json
+      - name: Check the checkout matches the release
         run: |
           version=$(node -p "require('./package.json').version")
-          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "tag $GITHUB_REF_NAME does not match package.json version $version"
+          if [ "$TAG" != "v$version" ]; then
+            echo "release-please tagged $TAG but package.json says $version"
             exit 1
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
@@ -63,12 +90,13 @@ jobs:
       - run: ls -R npm
 
       - name: Publish
-        # Publishing the root package first runs `prepublishOnly`, which is
-        # `napi prepublish`: it publishes the seven platform packages, creates
-        # the GitHub release, and writes them into optionalDependencies here.
+        # `npm publish` runs prepublishOnly, which is `napi prepublish`: it
+        # publishes the seven platform packages and writes them into
+        # optionalDependencies here. It does NOT create a GitHub release —
+        # release-please already did, and there is deliberately no GITHUB_TOKEN
+        # in this step, so it could not even if the flag were wrong.
         #
-        # A version with a hyphen (0.3.0-rc.1) goes out under `next`, so it
-        # cannot become the default install.
+        # A version with a hyphen (0.3.0-rc.1) goes out under `next`.
         run: |
           npm config set provenance true
           case "$VERSION" in
@@ -76,5 +104,4 @@ jobs:
             *)   npm publish --access public ;;
           esac
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

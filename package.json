@@ -55,9 +55,8 @@
     "format:toml": "taplo format",
     "format:rs": "cargo fmt",
     "lint": "oxlint",
-    "prepublishOnly": "napi prepublish -t npm",
-    "test": "ava",
-    "version": "napi version"
+    "prepublishOnly": "napi prepublish -t npm --no-gh-release",
+    "test": "ava"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.2.0",
