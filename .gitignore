@@ -147,6 +147,9 @@ dist
 *.node
 *.wasm
 
+# Per-platform packages, regenerated on every release by `napi create-npm-dirs`
+npm/
+
 ### Node Patch ###
 # Serverless Webpack directories
 .webpack/
