@@ -121,7 +121,20 @@ jobs:
         shell: bash
       - name: Bindings are up to date
         if: matrix.settings.target == 'x86_64-unknown-linux-gnu'
-        run: git diff --exit-code index.js index.d.ts
+        # index.js hardcodes the package version twice per platform branch
+        # (~100 lines). release-please bumps package.json without touching it,
+        # so on a release build those lines legitimately differ. Ignore them;
+        # still catch a forgotten `pnpm build` after a binding change.
+        run: git diff --exit-code -I 'bindingPackageVersion' -- index.js index.d.ts
+      - name: Upload generated bindings
+        if: matrix.settings.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@v7
+        with:
+          name: generated-js
+          path: |
+            index.js
+            index.d.ts
+          if-no-files-found: error
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         if: ${{ !startsWith(matrix.settings.target, 'wasm32-') }}

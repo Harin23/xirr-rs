@@ -67,11 +67,15 @@ release.
 ### When a release fails partway
 
 `napi prepublish` publishes the platform packages one at a time, so a failure
-in the middle can leave some published and some not. npm version numbers cannot
-be reused, so **do not retry the same version** — push a new `Release-As:`
-footer with the next one.
+in the middle can leave some published and some not.
 
-This is the main reason to cut an `-rc` first.
+**Use "Re-run failed jobs" first.** npm reports an already-published version as
+an error, which napi treats as "done, skip" — and the root `xirr-rs` package
+publishes last, so a re-run picks up where it stopped. It also reuses the same
+build artifacts and the same release-please outputs.
+
+Only cut a new version if something that *did* publish is actually broken. npm
+version numbers can never be reused, so a bad one is spent either way.
 
 ## Requirements
 
@@ -79,6 +83,16 @@ This is the main reason to cut an `-rc` first.
   not just publish to existing ones. A granular token scoped to `xirr-rs` alone
   will fail on the platform packages.
 - Nothing else; the GitHub release uses the built-in `GITHUB_TOKEN`.
+
+npm caps write tokens at 90 days, so this one will expire and releases will
+start failing on a schedule. The permanent fix is trusted publishing, which has
+to be configured per package and therefore only after all eight exist:
+
+1. Do the first release with the token.
+2. Enable trusted publishing (workflow `release.yml`) on all eight packages.
+3. Delete `NPM_TOKEN` **and** remove `registry-url` from `setup-node` in
+   `release.yml` — with `registry-url` set and no token, npm skips OIDC
+   entirely and publishing fails.
 
 ## Versions
 

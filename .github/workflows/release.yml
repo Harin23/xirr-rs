@@ -87,6 +87,23 @@ jobs:
       - name: Put each binary in its platform package
         run: pnpm napi artifacts
 
+      - name: Ship the freshly generated bindings
+        # index.js hardcodes the version in ~100 places, and the committed copy
+        # still says the previous one because release-please only bumps
+        # package.json. Publish the copy this release's own build produced.
+        run: cp artifacts/generated-js/index.js artifacts/generated-js/index.d.ts .
+
+      - name: Require a binary in every platform package
+        # napi skips a missing binary with only a debug log but still lists
+        # that platform in optionalDependencies, so users there would install
+        # cleanly and get nothing.
+        run: |
+          missing=0
+          for dir in npm/*/; do
+            ls "$dir"*.node >/dev/null 2>&1 || { echo "::error::no binary in $dir"; missing=1; }
+          done
+          exit $missing
+
       - run: ls -R npm
 
       - name: Publish
