@@ -1,23 +1,16 @@
 name: Release
 
+# Every push to main runs release-please. Usually it just opens or updates a
+# "chore: release x.y.z" PR and stops there.
+#
+# Merging that PR makes release-please tag the commit and create the GitHub
+# release, which flips release_created to true. Only then do build and publish
+# run — and they must run HERE, because a tag pushed with GITHUB_TOKEN never
+# starts a workflow of its own.
+
 on:
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Publish to npm'
-        type: boolean
-        default: false
   push:
-    branches:
-      - main
-    tags-ignore:
-      - '**'
-    paths-ignore:
-      - '**/*.md'
-      - LICENSE
-      - '**/*.gitignore'
-      - .editorconfig
-      - docs/**
+    branches: [main]
 
 concurrency:
   group: release-${{ github.ref }}
@@ -27,68 +20,107 @@ permissions:
   contents: read
 
 jobs:
+  release-please:
+    name: Release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # tag + release
+      pull-requests: write # the release PR
+      issues: write # labels on that PR
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   build:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
     uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ needs.release-please.outputs.tag_name }}
 
   publish:
     name: Publish
+    needs: [release-please, build]
+    if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
-    needs:
-      - build
     permissions:
       contents: read
-      id-token: write
+      id-token: write # npm provenance
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
     steps:
       - uses: actions/checkout@v7
-      - name: setup pnpm
-        uses: pnpm/action-setup@v6
-      - name: Setup node
-        uses: actions/setup-node@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Download all artifacts
+          registry-url: https://registry.npmjs.org
+
+      - name: Check the checkout matches the release
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v$version" ]; then
+            echo "release-please tagged $TAG but package.json says $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - run: pnpm install
+
+      - name: Create one npm package per platform
+        run: pnpm napi create-npm-dirs
+
+      - name: Download the binaries built above
         uses: actions/download-artifact@v8
         with:
           path: artifacts
-      - name: Flatten binaries into package root
-        run: find artifacts -name '*.node' -exec cp -f {} . \;
-        shell: bash
-      - name: Verify every target is present
+
+      - name: Put each binary in its platform package
+        run: pnpm napi artifacts
+
+      - name: Ship the freshly generated bindings
+        # index.js hardcodes the version in ~100 places, and the committed copy
+        # still says the previous one because release-please only bumps
+        # package.json. Publish the copy this release's own build produced.
+        run: cp artifacts/generated-js/index.js artifacts/generated-js/index.d.ts .
+
+      - name: Require a binary in every platform package
+        # napi skips a missing binary with only a debug log but still lists
+        # that platform in optionalDependencies, so users there would install
+        # cleanly and get nothing.
         run: |
-            missing=0
-            for t in darwin-arm64 darwin-x64 linux-x64-gnu linux-x64-musl \
-                     linux-arm64-gnu linux-arm64-musl win32-x64-msvc; do
-              if [ ! -f "xirr-rs.$t.node" ]; then
-                echo "::error::missing xirr-rs.$t.node"; missing=1
-              fi
-            done
-            ls -la *.node
-            exit $missing
-        shell: bash
-      - name: Verify tarball contents
-        run: npm pack --dry-run
-        shell: bash
+          missing=0
+          for dir in npm/*/; do
+            ls "$dir"*.node >/dev/null 2>&1 || { echo "::error::no binary in $dir"; missing=1; }
+          done
+          exit $missing
+
+      - run: ls -R npm
+
       - name: Publish
+        # `npm publish` runs prepublishOnly, which is `napi prepublish`: it
+        # publishes the seven platform packages and writes them into
+        # optionalDependencies here. It does NOT create a GitHub release —
+        # release-please already did, and there is deliberately no GITHUB_TOKEN
+        # in this step, so it could not even if the flag were wrong.
+        #
+        # A version with a hyphen (0.3.0-rc.1) goes out under `next`.
         run: |
           npm config set provenance true
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ];
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --access public
-          elif git log -1 --pretty=%B | grep "^v\?[0-9]\+\.[0-9]\+\.[0-9]\+$";
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --access public
-          elif git log -1 --pretty=%B | grep "^v\?[0-9]\+\.[0-9]\+\.[0-9]\+";
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --tag next --access public
-          else
-            echo "Not a release, skipping publish"
-          fi
+          case "$VERSION" in
+            *-*) npm publish --access public --tag next ;;
+            *)   npm publish --access public ;;
+          esac
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

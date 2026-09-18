@@ -82,6 +82,20 @@ __test__/golden/                    expected values from a real spreadsheet
 
 ---
 
+## Commits
+
+PR titles are conventional commits — `feat:`, `fix:`, `perf:`, `docs:`,
+`chore:`. CI checks the title on every PR.
+
+The title becomes the squash commit subject, and that subject is the only thing
+the release tooling ever reads. `feat` / `fix` / `perf` become CHANGELOG lines
+and drive the version bump; everything else is hidden. A breaking change gets
+`!` after the type (`feat!:`) or a `BREAKING CHANGE:` footer.
+
+Versions are never edited by hand. See [`RELEASING.md`](./RELEASING.md).
+
+---
+
 ## Before you claim a change works
 
 ```bash

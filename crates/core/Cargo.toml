@@ -1,6 +1,7 @@
 [package]
 name = "xirr-core"
-version = "0.1.0"
+# Not published to crates.io. package.json holds the real version.
+version = "0.0.0"
 edition = "2021"
 license = "MIT"
 description = "Financial functions (XIRR, IRR, NPV, PME) — port of the pyxirr core"

@@ -4,7 +4,8 @@ members = ["crates/core"]
 [package]
 edition = "2021"
 name = "xirr_rs"
-version = "0.1.0"
+# Not published to crates.io. package.json holds the real version.
+version = "0.0.0"
 license = "MIT"
 
 [lib]
