@@ -153,8 +153,12 @@ no indication why. Erroring is the honest behaviour.
 ```
 xirr(dates, amounts, guess, day_count, policy)
   │
-  ├─ CashFlow::new()          validate; compute year fractions and gross size
+  ├─ CashFlow::new()          validate; year fractions; gross size; netted form
   ├─ checked_guess()          reject NaN and ≤ -1
+  │
+  ├─ PHASE 0  NettedFlow::shape()
+  │             Net by year fraction, drop zeros, count sign changes.
+  │             0 changes → no root can exist. Return without searching.
   │
   ├─ PHASE 1  CashFlow::solve_like_a_spreadsheet(guess)
   │             → optimize::newton_excel_order()
@@ -166,9 +170,9 @@ xirr(dates, amounts, guess, day_count, policy)
        Lowest                  → roots()[0],           else Phase 1
        ClosestToGuess          → closest_to(roots()),  else Phase 1
 
-PHASE 2  CashFlow::solve_robustly(guess)
-  ├─ roots()  → optimize::find_brackets() + optimize::brentq()
-  └─ multi-start optimize::newton_to_residual() from guess + FALLBACK_SEEDS
+PHASE 2  CashFlow::solve_robustly(guess)   — entirely in log-rate space
+  ├─ roots()  → log_rate_grid() + optimize::find_crossings() + brentq()
+  └─ multi-start optimize::newton_to_residual() from guess + fallback seeds
 ```
 
 **Phase 1's result is returned without checking its residual.** This is the
@@ -179,6 +183,190 @@ would ever show.
 
 Phase 2 exists only to answer cash flows a spreadsheet cannot. It can _add_ an
 answer; it can never _change_ one.
+
+---
+
+## 5a. Phase 0: what the sign pattern proves
+
+`XNPV(r) = 0` is a polynomial in `x = 1/(1 + r) = e^-u`, so Descartes' rule of
+signs applies — but **to the netted series, not the input**. Two payments on
+the same date share a `δ` and are therefore one coefficient of that polynomial
+however they were entered. The series is netted by year fraction, sorted
+ascending, and zeros are dropped before anything is counted.
+
+Two limits then settle existence:
+
+```
+lim(u → +∞) sign G(u) = sign(first amount)      (smallest δ dominates)
+lim(u → -∞) sign G(u) = sign(last amount)       (largest  δ dominates)
+```
+
+| Netted sign changes | What is proved                                     |
+| ------------------- | -------------------------------------------------- |
+| `0`                 | **No root exists.** Every term keeps one sign.      |
+| `1`                 | **Exactly one root exists.**                        |
+| odd `n`             | The two limits differ ⇒ **at least one root exists**, and a bracket spanning the domain must contain it. |
+| even `n > 0`        | `0, 2, … n` roots. Nothing is proved.               |
+
+The odd case is what makes the guarantee possible: a grid that spans the whole
+domain **cannot** fail to bracket a root, so bisection cannot fail to find one.
+Failure then proves the root is outside the representable range, not that the
+search was too coarse.
+
+`validate_positive_negative` still runs first and still rejects flows with no
+positive or no negative *raw* amount, because a spreadsheet does. Phase 0
+catches the ones that pass it and still cannot have a root — such as
+`-11000` and `+20000` on the same date, which nets to `+9000`.
+
+---
+
+## 5b. Phase 2: why log-rate space
+
+Substituting `u = ln(1 + r)`:
+
+```
+G(u)  = Σ aᵢ · exp(-u · δᵢ)
+G'(u) = Σ -δᵢ · aᵢ · exp(-u · δᵢ)
+r     = expm1(u)
+```
+
+The whole of `r ∈ (-1, f64::MAX]` maps into `u ∈ [-36.7368, 709.7827]`, and
+those two numbers are `ln(2⁻⁵³)` and `ln(f64::MAX)` — representability
+boundaries, not tuning constants. A bounded grid at fixed cost therefore
+reaches **every rate an `f64` can express**, which is exactly what the previous
+`MAX_SEARCHED_RATE = 1e12` ceiling could not do at any setting.
+
+This matters more than it sounds. A cash flow whose netted day-zero position is
+a small outflow has a real, unique, well-defined IRR at `r ≈ 1e20` or higher:
+
+| Netted day-0 | `ln(1+r)` | `r`       |
+| ------------ | --------- | --------- |
+| `-1`         | 116.607   | 4.38e50   |
+| `-382`       | 46.926    | 2.40e20   |
+| `-1000`      | 36.027    | 4.43e15   |
+| `-80000`     | 2.429     | 10.34     |
+
+`1e12` is `u ≈ 27.6`. Everything above the third row was unreachable.
+
+Log space also fixes the tolerance model. One ULP at `r = 1e20` is ~16384, so
+no absolute step test can be satisfied there — raising iteration counts never
+helped, because the problem was conditioning, not budget.
+
+### The scaling trick
+
+`scaled_g` multiplies both `G` and `G'` by `exp(u·δ_ref)`, where `δ_ref` is
+whichever end of the schedule carries the largest exponent at that `u`. Every
+exponent becomes `≤ 0`.
+
+This is not an optimisation, it removes two failure modes outright:
+
+1. **No overflow.** Every term is bounded by `|aᵢ|`, at any `u`, so the domain
+   never has to be clipped to keep the objective evaluable.
+2. **No underflow artifact.** Without scaling, every discount factor underflows
+   to exactly `0.0` at large `u` and `G` evaluates to `0.0` — which bisection
+   reads as a root. With scaling the `δ_ref` term is exactly `a_ref·exp(0)`, so
+   `G(u) == 0.0` can only mean genuine cancellation.
+
+A positive constant factor changes neither the sign of `G` nor the location of
+its roots, and it cancels out of the Newton step `G/G'` because both components
+carry it. Nothing downstream needs to know.
+
+`optimize::find_crossings` additionally treats an exact zero as a root rather
+than a sign change, because `f64::signum` reports `+1.0` for `0.0` and a naive
+`signum` comparison manufactures a bracket wherever the function touches zero.
+
+### Turning points: the even-sign-change case
+
+Everything above finds roots by looking for sign changes, which settles the odd
+case completely — opposite signs at the two domain limits mean a bracket must
+exist. It says nothing about the even case, where roots come in pairs, and a
+pair is invisible to a sign-change scan in two ways:
+
+1. **Both roots inside one grid cell.** `G` carries the same sign at the two
+   nodes straddling them, so no bracket is reported. The dense band steps
+   `0.01` in `u`, so any pair closer than that is at risk.
+2. **A tangential (double) root.** The curve touches zero and comes back. `G`
+   never changes sign anywhere, so no bracket exists at any resolution — this
+   one cannot be fixed by refining the grid.
+
+One observation covers both: **between two roots `G'` must change sign, and at
+a double root `G'` is zero.** So every root a scan of `G` can miss has a turning
+point at or between the pair, and `G'` does change sign there even where `G`
+does not.
+
+`CashFlow::turning_points` brackets `G'` on the same grid, refines each with
+Brent, and the results are merged into the grid before roots are sought. Case 1
+then splits into two ordinary brackets. Case 2 has no bracket to produce, so the
+turning points are additionally offered as root candidates — `is_root` decides,
+using the tolerance that already gates every other candidate. No new tolerance
+is introduced.
+
+Nearly free: `scaled_g` already computed the derivative alongside the value and
+discarded it, so only the refinement is new work. Measured 3.27 ms/call on the
+hardest case in the corpus, against 3.28 before.
+
+**A turning point straddled by two roots that were already found is not
+offered.** Between two simple roots the turning point is the extremum of the
+pair, not a root — and when the pair is very close together the curve is flat
+enough that the extremum passes the residual test too, so offering it would
+report a third root in the middle of every near-double pair. The roots already
+found are the only reliable witness here; comparing the signs at neighbouring
+grid nodes does not work, because the pair can be narrower than one cell, which
+is the case this whole mechanism exists for.
+
+> ⚠️ **Known gap 1.** That suppression rule also hides a tangential root lying
+> *between* two simple roots. It needs four or more sign changes and a curve
+> that grazes zero exactly between two crossings. `xirr` still answers such a
+> flow; only `xirr_all_roots` is short by one. Distinguishing the two would need
+> a multiplicity test — checking `G'` at the candidate — which is left for when
+> a real cash flow produces one.
+
+> ⚠️ **Known gap 2: three or more roots inside one cell.** The mechanism above
+> handles a *pair* because the curve turns once between them, so `G'` takes
+> opposite signs at the two nodes straddling the cell and brackets there. Three
+> roots turn the curve twice, `G'` comes back to the sign it started with, and
+> the derivative scan misses them exactly as the value scan does.
+>
+> Verified: `u = 1.000, 1.004, 1.008` (one dense-band cell) enumerates as one
+> root; the same three at `u = 1.000, 1.010, 1.020` enumerate as three. The
+> coarse bands make it likelier in principle — the low band steps `0.25` — but
+> also require three IRRs within a fraction of a percent of each other near
+> total loss.
+>
+> The obvious extension is to recurse: bracket `G''` to separate the turning
+> points, then `G'''`, and so on. Each level buys one more root per cell and the
+> recursion never closes, so it is not implemented. The practical consequence is
+> that `XirrOutcome` reports `Root` where it should report `MultipleRoots` —
+> an ambiguity presented as a single answer, which is the failure mode this
+> library exists to prevent, so it is worth revisiting if a real flow hits it.
+
+The even case is therefore **thorough but unproved**, and the distinction is
+worth keeping in mind: `a_single_sign_change_always_yields_a_root` verifies a
+theorem, whereas the section-10 tests measure a construction.
+
+---
+
+## 5c. Typed outcomes
+
+`xirr()` returns `f64` and uses `NaN` for every non-answer. `xirr_outcome()`
+returns `XirrOutcome` instead, which names them:
+
+| Variant                | Meaning                                                    |
+| ---------------------- | ---------------------------------------------------------- |
+| `Root(r)`              | One rate solves the flow.                                   |
+| `MultipleRoots{..}`    | Several do. `selected` is the policy's pick, `all` lists them. |
+| `NoRootExists`         | **Proved** by Phase 0. An input problem.                    |
+| `DidNotConverge`       | A root may exist; the solver did not produce one.           |
+| `SpreadsheetNumError`  | `#NUM!` faithfully reproduced under `SpreadsheetCompat`.    |
+
+The last is not redundant. `[-1000, +1]` a year apart makes every spreadsheet
+report `#NUM!`, and its IRR is -99.898%. Calling that `NoRootExists` would be
+false and calling it `DidNotConverge` would blame a solver that never ran.
+
+`selected` agrees with one element of `all` to within `DISTINCT_ROOT_TOL`, but
+is not guaranteed to be the same `f64`: it comes from the spreadsheet's Newton
+iteration in rate space and `all` from Brent in log-rate space, and two correct
+algorithms land on adjacent floats.
 
 ### The `CashFlow` type
 
@@ -194,18 +382,44 @@ type that owns its data read like the mathematics.
 All declared in `scheduled/xirr.rs`, each with its reason. **They are not
 interchangeable.**
 
-| Constant            | Value   | Measures        | Why                                                                                    |
-| ------------------- | ------- | --------------- | -------------------------------------------------------------------------------------- |
-| `DEFAULT_GUESS`     | `0.1`   | rate            | Spreadsheet default. Part of the public contract, since the answer is guess-dependent. |
-| `RESIDUAL_REL_TOL`  | `1e-9`  | money, relative | Scaled by gross cash flow. Absolute tolerances made 1e12 unsolvable while 1e9 solved.  |
-| `DISTINCT_ROOT_TOL` | `1e-7`  | rate            | Two `brentq` runs on one root from different brackets must dedupe.                     |
-| `MAX_SEARCHED_RATE` | `1e6`   | rate            | Phase 2 upper bound.                                                                   |
-| `EXCEL_EPS`         | `1e-10` | both, absolute  | **Do not touch.** Upstream `fMaxEps`.                                                  |
-| `EXCEL_MAX_ITER`    | `50`    | —               | **Do not touch.** Upstream `nMaxIter`.                                                 |
-| `EXCEL_MAX_SCAN`    | `200`   | —               | **Do not touch.** Upstream rescan limit.                                               |
+| Constant                 | Value      | Measures          | Why                                                                                     |
+| ------------------------ | ---------- | ----------------- | --------------------------------------------------------------------------------------- |
+| `DEFAULT_GUESS`          | `0.1`      | rate              | Spreadsheet default. Part of the public contract, since the answer is guess-dependent.  |
+| `RESIDUAL_REL_TOL`       | `1e-9`     | money, relative   | Scaled by the larger of the gross cash flow and the gross **discounted** cash flow.     |
+| `DISTINCT_ROOT_TOL`      | `1e-7`     | rate              | Two `brentq` runs on one root from different brackets must dedupe.                      |
+| `DISTINCT_ROOT_U_TOL`    | `1e-7`     | log-rate          | The same idea, scale-free. Does the real work; the rate-space one is a second pass.     |
+| `MIN_SEARCHED_LOG_RATE`  | `ln(2⁻⁵³)` | log-rate          | Representability, not policy. Below it, `1 + r` is not a distinct `f64` above `-1`.     |
+| `MAX_SEARCHED_LOG_RATE`  | `ln(f64::MAX)` | log-rate      | Representability, not policy. Above it, `expm1` overflows.                              |
+| `EXCEL_EPS`              | `1e-10`    | both, absolute    | **Do not touch.** Upstream `fMaxEps`.                                                   |
+| `EXCEL_MAX_ITER`         | `50`       | —                 | **Do not touch.** Upstream `nMaxIter`.                                                  |
+| `EXCEL_MAX_SCAN`         | `200`      | —                 | **Do not touch.** Upstream rescan limit.                                                |
 
 The `EXCEL_*` constants live in `optimize.rs` beside the code that uses them and
 must match upstream exactly.
+
+### Why the residual scale is a maximum of two things
+
+`RESIDUAL_REL_TOL × gross_size` was the previous rule. It is correct for
+`r ≥ 0`, where every discount factor is `≤ 1` and the discounted flow can only
+be smaller — so the published audit condition stays exact there.
+
+It is **wrong** near total loss. A nine-year flow at `r = -0.998` discounts by
+`(1+r)⁻⁹ ≈ 1e26`, so `XNPV` is a difference of terms around `1e30` and the
+smallest residual an `f64` can express is about `1e14` — eleven orders of
+magnitude above a tolerance of `1e-9 × 4e5`. That test cannot be met by any
+solver at any iteration count, and a real root found by the grid was being
+discarded because of it. This is the same defect as an absolute epsilon, one
+level up: the yardstick was itself scale-dependent.
+
+Taking the larger of the two floors means the tolerance is never tighter than
+the floating-point noise of the quantity actually being measured.
+
+### `MAX_SEARCHED_RATE` is gone
+
+It was `1e12`, i.e. `u ≈ 27.6`. It made `xirr()` and `xirr_all_roots()`
+disagree — the former returned `2.4e20` for a flow the latter reported as
+having no roots at all. The log-rate bounds replace it, and they are derived
+from `f64` rather than chosen.
 
 ---
 
@@ -217,8 +431,20 @@ Three layers, all required:
 | ---------- | -------------------------------------------------------- | ----------------------------------------------- |
 | Unit       | `#[cfg(test)]` in each module                            | Individual functions                            |
 | Edge cases | `crates/core/tests/edge_cases.rs`                        | Validation, numeric extremes, policy invariants |
+| Robust     | `crates/core/tests/robust_solver.rs`                     | Existence, reachability, typed outcomes, perf, and the even-sign-change property tests (§10) |
 | Golden     | `crates/core/tests/golden.rs`, `__test__/golden.spec.ts` | Spreadsheet parity                              |
 | Binding    | `__test__/edge-cases.spec.ts`                            | Date marshalling, null vs throw, typed arrays   |
+
+### The parity snapshot
+
+`crates/core/tests/fixtures/spreadsheet_compat_473b9ff.csv` holds the raw `f64`
+bit pattern of every `SpreadsheetCompat` result at commit `473b9ff` — 89 golden
+cases x 5 guesses = 445 rows. It was produced by *running that commit*, not by
+running the current code, so it cannot drift with what it protects.
+
+Bit patterns rather than decimal, because a decimal round-trip hides exactly
+the one-ULP divergences that break parity on multiple-root flows. Any change to
+Phase 1 fails this test, which is the intent.
 
 The golden corpus is 89 cases whose expected values come from a **real
 spreadsheet engine**, never from this library. See `scripts/README.md` for
@@ -233,12 +459,24 @@ the napi layer shows up as one suite passing and the other failing.
 
 1. **Never modify `newton_excel_order` to be more correct.** Its defects are the
    specification.
-2. **Run the golden suite before and after.** `cargo test -p xirr-core`. Any
-   change in a golden value is a parity break, not an improvement.
+2. **Run the golden suite and the parity snapshot before and after.**
+   `cargo test -p xirr-core`. Any change in a golden value, or any row of
+   `spreadsheet_compat_473b9ff.csv` that no longer reproduces bit-for-bit, is a
+   parity break rather than an improvement.
 3. **New tolerances go in `xirr.rs` with a documented reason.** Do not introduce
    a bare numeric literal into a comparison.
 4. **Phase 2 changes are safe; Phase 1 changes are not.** Phase 2 only runs
    where a spreadsheet already failed.
-5. **If you add cases to the corpus**, regenerate expectations from a
+5. **Do the arithmetic in log-rate space.** Anything added to Phase 0 or Phase 2
+   that reasons in rate space will reacquire the conditioning bug: absolute
+   tolerances are unsatisfiable at large `r`, and discount factors overflow at
+   `r` near `-1` over long horizons. `u` is bounded, so neither happens.
+6. **A tolerance must be relative to the quantity it measures.** Not to the
+   input, not to a constant. This has now been the root cause twice.
+7. **If you add cases to the corpus**, regenerate expectations from a
    spreadsheet, not from this code. A golden file derived from the
    implementation tests nothing.
+8. **A reference used by a test must not come from the solver.** The
+   section-10 tests build flows whose roots are known by factorisation and
+   check them against a brute-force scan written out in the test file. A test
+   that asks the search to confirm itself proves nothing.

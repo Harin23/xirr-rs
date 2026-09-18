@@ -248,7 +248,7 @@ fn every_policy_agrees_when_the_root_is_unique() {
   // Descartes: one sign change means one root, so policy cannot matter.
   let d = annual(4);
   let a = [-1000.0, 300.0, 400.0, 500.0];
-  assert_eq!(sign_changes(&a), 1);
+  assert_eq!(sign_changes(&d, &a, None).unwrap(), 1);
 
   let rates: Vec<f64> = ALL_POLICIES
     .iter()

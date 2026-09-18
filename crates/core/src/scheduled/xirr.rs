@@ -20,19 +20,25 @@
 //! matched the spreadsheet 37% of the time and "return the root nearest the
 //! guess" 62%. Reproducing the iteration itself matches 100%.
 //!
-//! # The two phases
+//! # The three phases
 //!
 //! ```text
 //!   xirr()
 //!     |
-//!     +-- Phase 1: CashFlow::solve_like_a_spreadsheet()   <- always runs first
+//!     +-- Phase 0: NettedFlow::shape()                    <- always runs first
+//!     |     Net by year fraction, drop zeros, count sign changes. Decides
+//!     |     whether a root can exist at all, before any search happens.
+//!     |
+//!     +-- Phase 1: CashFlow::solve_like_a_spreadsheet()   <- parity path
 //!     |     Newton from `guess` (default 0.1), then a fixed 0.01 rescan
 //!     |     grid over [-0.99, +0.99]. Verbatim port of the algorithm
 //!     |     Excel-compatible spreadsheets use. Returns NaN on #NUM!.
 //!     |
 //!     +-- Phase 2: CashFlow::solve_robustly()             <- only if 1 gave up
-//!           Bracketed root finding over (-1, 1e6], then multi-start Newton.
-//!           Answers cash flows no spreadsheet can, but never *overrides* one.
+//!           Bracketed Brent in **log-rate space** `u = ln(1 + r)` over the
+//!           whole representable domain, then multi-start Newton in the same
+//!           space. Answers cash flows no spreadsheet can, but never
+//!           *overrides* one.
 //! ```
 //!
 //! Phase 1's result is returned **verbatim, without checking its residual**.
@@ -40,6 +46,25 @@
 //! exactly what would let this library print 200% where Excel prints 5%.
 //! Callers who want to know whether the rate is a true root can call [`xnpv`]
 //! on it. See `docs/ALGORITHM.md` for the full rationale.
+//!
+//! # Why log-rate space
+//!
+//! Substituting `u = ln(1 + r)` turns `XNPV` into
+//! `G(u) = Σ aᵢ·exp(-u·δᵢ)`, which is well conditioned across the entire
+//! domain. The whole of `r ∈ (-1, f64::MAX]` maps into
+//! `u ∈ [-36.74, 709.79]`, so a bounded grid at fixed cost reaches *every
+//! representable rate* - something no ceiling on a rate-space search can do.
+//! Roots at `r ≈ 1e20` are ordinary here; in rate space one ULP at `1e20` is
+//! ~16384, so no absolute step or residual test can ever be satisfied there.
+//!
+//! # Failure is typed, not `NaN`
+//!
+//! [`xirr`] keeps its historical `NaN`-means-no-answer signature. Use
+//! [`xirr_outcome`] to find out *which* non-answer occurred: a cash flow that
+//! provably has no root ([`XirrOutcome::NoRootExists`]) and one the solver
+//! merely failed on ([`XirrOutcome::DidNotConverge`]) are different facts with
+//! different operational responses, and collapsing both to `NaN` is a defect
+//! in a financial system.
 //!
 //! # Attribution
 //!
@@ -50,7 +75,7 @@
 use super::{year_fraction, DayCount};
 use crate::{
   models::{validate, validate_length, DateLike, InvalidPaymentsError},
-  optimize::{brentq, find_brackets, newton_excel_order, newton_to_residual},
+  optimize::{brentq, find_crossings, newton_excel_order, newton_to_residual, Crossing},
 };
 
 // ---------------------------------------------------------------------------
@@ -80,21 +105,45 @@ pub const RESIDUAL_REL_TOL: f64 = 1e-9;
 /// measures money, this one measures rates. 1e-7 is a hundred-thousandth of a
 /// basis point - far below any reporting precision, but comfortably above the
 /// spread between two `brentq` runs converging on one root from two brackets.
-const DISTINCT_ROOT_TOL: f64 = 1e-7;
+pub const DISTINCT_ROOT_TOL: f64 = 1e-7;
 
-/// Upper bound of the Phase 2 root search.
+/// How far apart two roots must be in **log-rate space** to count as
+/// different.
 ///
-/// Must stay at or above the rates Phase 1 can reach, otherwise [`xirr`] and
-/// [`xirr_all_roots`] disagree: a 1e-6 outflow returning 100,000 has a real
-/// IRR of 9.3e10, which Phase 1 finds and a 1e6 ceiling would miss. The grid
-/// above +100% grows geometrically, so raising this ceiling costs a few
-/// hundred extra evaluations, not a proportional number.
-const MAX_SEARCHED_RATE: f64 = 1.0e12;
+/// A fixed step in `u = ln(1 + r)` is a fixed *relative* step in `1 + r`, so
+/// unlike [`DISTINCT_ROOT_TOL`] this stays meaningful at every magnitude. At
+/// `r ≈ 0` the two are numerically interchangeable (`Δu ≈ Δr`); at `r ≈ 1e20`
+/// the rate-space test can never fire, because adjacent `f64` values there are
+/// ~16384 apart. Both are applied: this one does the work, the rate-space one
+/// is retained as a second pass so behaviour at ordinary rates is unchanged.
+const DISTINCT_ROOT_U_TOL: f64 = 1e-7;
 
-/// Seeds for the multi-start Newton fallback, tried in order after the
-/// caller's guess. Spread across the plausible range so a root that bracketing
-/// missed still gets a chance.
+/// Lower end of the searched log-rate domain: `ln(2^-53)`.
+///
+/// This is not a policy choice, it is the representability boundary.
+/// `nextafter(-1.0, 0.0)` is `-1 + 2^-53`, so `2^-53` is the smallest `1 + r`
+/// that any `f64` rate strictly greater than `-1` can produce. Nothing below
+/// this can be returned, so nothing below this is worth searching.
+pub const MIN_SEARCHED_LOG_RATE: f64 = -36.736_800_569_677_1;
+
+/// Upper end of the searched log-rate domain: `ln(f64::MAX)`.
+///
+/// Also a representability boundary rather than a policy choice: `expm1` of
+/// anything larger overflows to infinity. The previous revision capped the
+/// search at a rate of `1e12`, which is `u ≈ 27.6` - it could not reach the
+/// (unique, real, and perfectly ordinary) roots near `u ≈ 47` that a cash
+/// flow netting to a small day-zero outflow produces.
+pub const MAX_SEARCHED_LOG_RATE: f64 = 709.782_712_893_384;
+
+/// Seeds for the multi-start Newton fallback, in **rate** space, tried in
+/// order after the caller's guess. Spread across the plausible range so a root
+/// that bracketing missed still gets a chance.
 const FALLBACK_SEEDS: [f64; 6] = [0.0, -0.5, -0.9, 0.5, 2.0, 10.0];
+
+/// Further seeds, in **log-rate** space, covering the magnitudes no rate-space
+/// seed can express. Newton in `u` from `u = 400` is an ordinary iteration;
+/// the same point in rate space is `1e173`.
+const FALLBACK_LOG_SEEDS: [f64; 8] = [-20.0, -5.0, 5.0, 20.0, 60.0, 150.0, 350.0, 650.0];
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -126,6 +175,89 @@ pub enum RootPolicy {
   ClosestToGuess,
 }
 
+/// The result of a solve, with every non-answer named.
+///
+/// [`xirr`] returns `f64` and uses `NaN` for all four failure modes below.
+/// That is fine for a spreadsheet cell and wrong for a ledger: "this cash flow
+/// cannot have an IRR" and "our solver gave up" call for different operational
+/// responses, and one of them is a data-quality bug in the caller's system.
+/// [`xirr_outcome`] returns this instead.
+#[derive(Debug, Clone, PartialEq)]
+pub enum XirrOutcome {
+  /// A single rate solves `XNPV(r) = 0`, and this is it.
+  ///
+  /// Under [`RootPolicy::SpreadsheetCompat`] this is the spreadsheet's answer
+  /// reproduced verbatim and its residual is **not** checked - see the parity
+  /// contract in the module docs. Under every other policy the rate has passed
+  /// the residual test in [`RESIDUAL_REL_TOL`].
+  Root(f64),
+
+  /// `XNPV(r) = 0` has more than one solution. `selected` is what [`xirr`]
+  /// returns for the same arguments; `all` is every root found, ascending.
+  ///
+  /// The single number is a **convention**, not a fact. Report the ambiguity.
+  MultipleRoots { selected: f64, all: Vec<f64> },
+
+  /// No rate can solve this cash flow, and that is provable rather than
+  /// suspected: after netting flows that share a date and discarding zeros,
+  /// every remaining amount has the same sign, so every term of `XNPV` has
+  /// the same sign at every rate and the sum never reaches zero.
+  ///
+  /// This is an **input** problem. A spreadsheet shows `#NUM!` here too.
+  NoRootExists,
+
+  /// A root may exist - there is at least one sign change - but the solver did
+  /// not produce one that passes the residual test.
+  ///
+  /// This also covers the case where a root provably exists but lies outside
+  /// the representable range (see [`MAX_SEARCHED_LOG_RATE`]): with an even
+  /// number of sign changes the two are not distinguishable without exact
+  /// arithmetic, so they share a variant. Either way it is a **solver**
+  /// outcome, not an input verdict, and should be escalated rather than
+  /// treated as "no IRR".
+  DidNotConverge,
+
+  /// [`RootPolicy::SpreadsheetCompat`] only: the spreadsheet algorithm gave up
+  /// (`#NUM!`) on a cash flow that is **not** provably rootless.
+  ///
+  /// Distinct from [`XirrOutcome::DidNotConverge`] because nothing here failed:
+  /// the `#NUM!` was faithfully reproduced, and rerunning under
+  /// [`RootPolicy::SpreadsheetThenRobust`] will very often return a rate.
+  /// `[-1000, +1]` a year apart is the canonical example - every spreadsheet
+  /// reports `#NUM!`, and the IRR is -99.898%.
+  SpreadsheetNumError,
+}
+
+impl XirrOutcome {
+  /// The rate, if one was produced. `None` for every failure variant.
+  ///
+  /// Named `rate` rather than `unwrap_or_nan` on purpose: the point of this
+  /// type is that the `f64` and the failure are not the same channel.
+  pub fn rate(&self) -> Option<f64> {
+    match self {
+      Self::Root(r) => Some(*r),
+      Self::MultipleRoots { selected, .. } => Some(*selected),
+      _ => None,
+    }
+  }
+
+  /// How many roots were found. `0` for every failure variant, `1` for
+  /// [`XirrOutcome::Root`].
+  pub fn root_count(&self) -> usize {
+    match self {
+      Self::Root(_) => 1,
+      Self::MultipleRoots { all, .. } => all.len(),
+      _ => 0,
+    }
+  }
+
+  /// Whether the IRR is ambiguous, i.e. the returned rate is one of several
+  /// mathematically valid answers.
+  pub fn is_ambiguous(&self) -> bool {
+    matches!(self, Self::MultipleRoots { .. })
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -150,22 +282,60 @@ pub fn xirr(
 ) -> Result<f64, InvalidPaymentsError> {
   let flow = CashFlow::new(dates, amounts, day_count)?;
   let guess = checked_guess(guess)?;
+  Ok(flow.solve(guess, policy.unwrap_or_default()))
+}
+
+/// [`xirr`], with every non-answer named instead of collapsed to `NaN`.
+///
+/// The rate it reports is **identical** to [`xirr`]'s for the same arguments;
+/// this function only adds the information `f64` cannot carry. Prefer it
+/// anywhere the difference between "this input cannot have an IRR" and "we
+/// could not find the IRR" has to reach a human or a ledger.
+///
+/// ```ignore
+/// match xirr_outcome(&dates, &amounts, None, None, None)? {
+///     XirrOutcome::Root(r)                        => post(r),
+///     XirrOutcome::MultipleRoots { selected, all } => post_with_caveat(selected, &all),
+///     XirrOutcome::NoRootExists                   => reject_as_data_error(),
+///     XirrOutcome::DidNotConverge                 => escalate(),
+///     XirrOutcome::SpreadsheetNumError            => retry_without_parity(),
+/// }
+/// ```
+pub fn xirr_outcome(
+  dates: &[DateLike],
+  amounts: &[f64],
+  guess: Option<f64>,
+  day_count: Option<DayCount>,
+  policy: Option<RootPolicy>,
+) -> Result<XirrOutcome, InvalidPaymentsError> {
+  let flow = CashFlow::new(dates, amounts, day_count)?;
+  let guess = checked_guess(guess)?;
   let policy = policy.unwrap_or_default();
+  let rate = flow.solve(guess, policy);
 
-  // Phase 1 always runs first: every policy either returns its answer or
-  // needs to know that it failed.
-  let spreadsheet_rate = flow.solve_like_a_spreadsheet(guess);
+  if !rate.is_finite() {
+    return Ok(match flow.netted.shape() {
+      Shape::NoRootExists => XirrOutcome::NoRootExists,
+      // Parity gave up without the robust path ever being consulted, so
+      // "did not converge" would blame a solver that never ran.
+      _ if policy == RootPolicy::SpreadsheetCompat => XirrOutcome::SpreadsheetNumError,
+      _ => XirrOutcome::DidNotConverge,
+    });
+  }
 
-  Ok(match policy {
-    RootPolicy::SpreadsheetCompat => spreadsheet_rate,
-
-    RootPolicy::SpreadsheetThenRobust if spreadsheet_rate.is_finite() => spreadsheet_rate,
-    RootPolicy::SpreadsheetThenRobust => flow.solve_robustly(guess),
-
-    // These two ignore Phase 1's choice but still fall back to it when no root
-    // can be enumerated, so they never lose an answer the default would find.
-    RootPolicy::Lowest => flow.roots().first().copied().unwrap_or(spreadsheet_rate),
-    RootPolicy::ClosestToGuess => closest_to(&flow.roots(), guess).unwrap_or(spreadsheet_rate),
+  // Only a flow with two or more sign changes can have two or more roots
+  // (Descartes), so the common case never pays for enumeration.
+  if flow.netted.sign_changes() < 2 {
+    return Ok(XirrOutcome::Root(rate));
+  }
+  let all = flow.roots();
+  Ok(if all.len() > 1 {
+    XirrOutcome::MultipleRoots {
+      selected: rate,
+      all,
+    }
+  } else {
+    XirrOutcome::Root(rate)
   })
 }
 
@@ -197,36 +367,225 @@ pub fn xnpv(
   if dates.is_empty() {
     return Ok(0.0);
   }
-  Ok(
-    CashFlow {
-      amounts: amounts.to_vec(),
-      deltas: year_fractions(dates, day_count),
-      scale: gross_size(amounts),
-    }
-    .xnpv(rate),
-  )
+  Ok(CashFlow::unvalidated(amounts, dates, day_count).xnpv(rate))
 }
 
-/// Sign changes in the cash flow, ignoring zero and non-finite amounts.
+/// Sign changes in the **date-netted** cash flow: the number that Descartes'
+/// rule of signs actually bounds the root count by.
 ///
-/// By Descartes' rule of signs, zero or one sign change means at most one root
-/// exists in `(-1, inf)` - so every [`RootPolicy`] must agree and the
-/// multiple-root question does not arise.
-pub fn sign_changes(amounts: &[f64]) -> i32 {
-  let mut changes = 0;
-  let mut previous: Option<f64> = None;
-  for &amount in amounts.iter().filter(|a| a.is_finite() && **a != 0.0) {
-    if previous.is_some_and(|prev: f64| prev.signum() != amount.signum()) {
-      changes += 1;
-    }
-    previous = Some(amount);
-  }
-  changes
+/// Two payments on the same date share a year fraction, so mathematically they
+/// are one flow and must be summed before any sign is read off them. Netting
+/// also makes the count independent of input order. Both matter, and a version
+/// of this function that took only the amounts got both wrong:
+///
+/// - `[-11000, +20000]` on one date is `+9000`: **zero** sign changes, so no
+///   root exists, where the raw amounts show one and imply a root does.
+/// - `[-1, -5, +3]` on dates `d0, d5, d2` is `-1, +3, -5` once ordered:
+///   **two** sign changes, where the raw amounts show one.
+///
+/// # What the count proves
+///
+/// | Sign changes | Roots in `(-1, inf)`      |
+/// | ------------ | ------------------------- |
+/// | `0`          | **none**, proved          |
+/// | `1`          | **exactly one**, proved   |
+/// | odd `n`      | at least one, at most `n` |
+/// | even `n > 0` | `0, 2, .. n` - unproved   |
+///
+/// The odd/even split is Descartes' parity rule and it is what makes the
+/// robust path's guarantee possible: see [`xirr_outcome`].
+pub fn sign_changes(
+  dates: &[DateLike],
+  amounts: &[f64],
+  day_count: Option<DayCount>,
+) -> Result<usize, InvalidPaymentsError> {
+  validate_length(amounts, dates)?;
+  Ok(NettedFlow::new(&year_fractions(dates, day_count), amounts).sign_changes())
 }
 
 // ---------------------------------------------------------------------------
 // CashFlow: the objective function and everything that operates on it
 // ---------------------------------------------------------------------------
+
+/// What the sign pattern of a netted cash flow proves about its roots.
+///
+/// Descartes' rule of signs, applied to `XNPV` written as a polynomial in
+/// `x = 1/(1 + r) = exp(-u)`: the number of positive roots is at most the
+/// number of sign changes in the coefficients ordered by exponent, and has the
+/// same parity. Combined with the two limits
+/// `sign G(+inf) = sign(first amount)` and `sign G(-inf) = sign(last amount)`,
+/// this settles existence outright in two of the three cases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+  /// Zero sign changes. Every term of `XNPV` keeps one sign at every rate, so
+  /// the sum never reaches zero. Proved, not guessed.
+  NoRootExists,
+  /// An odd number of sign changes. The two limits therefore have opposite
+  /// signs, so a bracket spanning the domain is guaranteed to contain a root
+  /// and bisection cannot fail to find one.
+  RootGuaranteed,
+  /// An even, non-zero number of sign changes. There may be `0, 2, 4, ...`
+  /// roots; nothing is proved and the grid has to do the work.
+  RootPossible,
+  /// A non-finite amount is present. Nothing can be proved about anything.
+  Undefined,
+}
+
+/// The cash flow reduced to its mathematical content.
+///
+/// One entry per distinct year fraction, ascending, zeros discarded. This is
+/// the object Descartes' rule applies to; the raw input is not, because two
+/// payments on the same date share a `δ` and are therefore a single term of
+/// the sum however they were entered.
+///
+/// Netting by year fraction rather than by calendar date is deliberate and
+/// slightly stronger: under ACT conventions the two are the same relation,
+/// and under the 30/360 family two distinct dates can map to the same `δ` -
+/// in which case they *are* one term of `XNPV` and netting them is correct.
+struct NettedFlow {
+  /// `(δ, amount)`, `δ` strictly ascending, every amount finite and non-zero.
+  terms: Vec<(f64, f64)>,
+  /// Set when the input contained a non-finite amount, which invalidates
+  /// every existence claim below.
+  poisoned: bool,
+}
+
+impl NettedFlow {
+  fn new(deltas: &[f64], amounts: &[f64]) -> Self {
+    let poisoned = amounts.iter().any(|a| !a.is_finite()) || deltas.iter().any(|d| !d.is_finite());
+
+    let mut pairs: Vec<(f64, f64)> = deltas
+      .iter()
+      .copied()
+      .zip(amounts.iter().copied())
+      .filter(|(d, a)| d.is_finite() && a.is_finite())
+      .collect();
+    // `total_cmp` rather than `partial_cmp().unwrap()`: a total order needs no
+    // `expect`, and the solve path must not contain one.
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut terms: Vec<(f64, f64)> = Vec::with_capacity(pairs.len());
+    for (delta, amount) in pairs {
+      match terms.last_mut() {
+        Some(last) if last.0 == delta => last.1 += amount,
+        _ => terms.push((delta, amount)),
+      }
+    }
+    terms.retain(|(_, a)| *a != 0.0);
+
+    Self { terms, poisoned }
+  }
+
+  fn sign_changes(&self) -> usize {
+    self
+      .terms
+      .windows(2)
+      .filter(|w| (w[0].1 > 0.0) != (w[1].1 > 0.0))
+      .count()
+  }
+
+  fn shape(&self) -> Shape {
+    if self.poisoned {
+      Shape::Undefined
+    } else {
+      match self.sign_changes() {
+        0 => Shape::NoRootExists,
+        n if n % 2 == 1 => Shape::RootGuaranteed,
+        _ => Shape::RootPossible,
+      }
+    }
+  }
+
+  /// `G(u) = Σ aᵢ·exp(-u·δᵢ)` and `G'(u)`, both multiplied by the same
+  /// strictly positive constant.
+  ///
+  /// The constant is `exp(u·δ_ref)` where `δ_ref` is whichever end of the
+  /// schedule carries the largest exponent at this `u`. Every exponent is then
+  /// `≤ 0`, so **no term can overflow at any `u`**, and the smallest amount in
+  /// the flow is always present at full magnitude.
+  ///
+  /// Scaling by a positive constant changes neither the sign of `G` nor the
+  /// location of its roots, and it cancels out of the Newton step `G/G'`
+  /// because both components carry the same factor. What it does change is the
+  /// failure mode the naive form has: with no scaling, every discount factor
+  /// underflows to exactly `0.0` at large `u` and `G` evaluates to `0.0`,
+  /// which bisection reads as a root. Here the `δ_ref` term is exactly
+  /// `a_ref·exp(0)`, so `G(u) == 0.0` can only ever mean genuine cancellation.
+  fn scaled_g(&self, u: f64) -> (f64, f64) {
+    let Some(&(first, _)) = self.terms.first() else {
+      return (0.0, 0.0);
+    };
+    let d_ref = if u >= 0.0 {
+      first
+    } else {
+      self.terms[self.terms.len() - 1].0
+    };
+
+    let mut value = 0.0;
+    let mut deriv = 0.0;
+    for &(delta, amount) in &self.terms {
+      let term = amount * (-u * (delta - d_ref)).exp();
+      value += term;
+      deriv -= delta * term;
+    }
+    (value, deriv)
+  }
+
+  /// `Σ |aᵢ|·exp(-u·δᵢ)`, carrying the same positive factor as
+  /// [`NettedFlow::scaled_g`], so the ratio of the two is scale-free.
+  fn scaled_gross(&self, u: f64) -> f64 {
+    let Some(&(first, _)) = self.terms.first() else {
+      return 0.0;
+    };
+    let d_ref = if u >= 0.0 {
+      first
+    } else {
+      self.terms[self.terms.len() - 1].0
+    };
+    self
+      .terms
+      .iter()
+      .map(|&(delta, amount)| amount.abs() * (-u * (delta - d_ref)).exp())
+      .sum()
+  }
+}
+
+/// Log-rate abscissae spanning the whole representable domain.
+///
+/// A uniform step in `u` is a uniform *relative* step in `1 + r`, so one grid
+/// resolves 0.01% differences near zero and factor-of-`e` differences at
+/// `r = 1e300` at the same cost - roughly 3,100 nodes for the entire domain.
+/// The equivalent rate-space grid does not exist at any node count.
+///
+/// Three bands, because root density is not uniform: essentially every rate a
+/// financial system will ever see lies in `|u| ≤ 8`, i.e.
+/// `r ∈ [-99.97%, +298,000%]`.
+fn log_rate_grid() -> Vec<f64> {
+  /// Half-width of the dense band, in `u`.
+  const FINE_HALF_WIDTH: f64 = 8.0;
+  /// Dense-band step. 0.01 in `u` is a 1.005x step in `1 + r`.
+  const FINE_STEP: f64 = 0.01;
+  /// Step below the dense band, covering rates within 0.03% of total loss.
+  const LOW_STEP: f64 = 0.25;
+  /// Step above the dense band. Two roots a factor of `e^0.5` apart at
+  /// `r > 2980` would be missed by the grid; the multi-start Newton fallback
+  /// and the guaranteed full-domain bracket both still apply there.
+  const HIGH_STEP: f64 = 0.5;
+
+  fn extend(grid: &mut Vec<f64>, from: f64, to: f64, step: f64) {
+    let count = ((to - from) / step).ceil().max(0.0) as usize;
+    // `from + i * step` rather than repeated addition: no drift, and the
+    // node positions are identical on every platform and every run.
+    grid.extend((0..count).map(|i| from + i as f64 * step));
+  }
+
+  let mut grid = Vec::with_capacity(3200);
+  extend(&mut grid, MIN_SEARCHED_LOG_RATE, -FINE_HALF_WIDTH, LOW_STEP);
+  extend(&mut grid, -FINE_HALF_WIDTH, FINE_HALF_WIDTH, FINE_STEP);
+  extend(&mut grid, FINE_HALF_WIDTH, MAX_SEARCHED_LOG_RATE, HIGH_STEP);
+  grid.push(MAX_SEARCHED_LOG_RATE);
+  grid
+}
 
 /// A validated cash flow, ready to be solved.
 ///
@@ -239,6 +598,9 @@ struct CashFlow {
   deltas: Vec<f64>,
   /// Sum of `|amount|`, floored at 1.0. Scales the residual tolerance.
   scale: f64,
+  /// The same flow netted by year fraction. Phase 0 and Phase 2 use this;
+  /// Phase 1 must not, because summation order is part of parity.
+  netted: NettedFlow,
 }
 
 impl CashFlow {
@@ -249,11 +611,19 @@ impl CashFlow {
   ) -> Result<Self, InvalidPaymentsError> {
     validate(amounts, Some(dates))?;
     reject_dates_before_the_first(dates)?;
-    Ok(Self {
+    Ok(Self::unvalidated(amounts, dates, day_count))
+  }
+
+  /// For [`xnpv`], which evaluates any rate against any schedule and so must
+  /// not require both signs to be present.
+  fn unvalidated(amounts: &[f64], dates: &[DateLike], day_count: Option<DayCount>) -> Self {
+    let deltas = year_fractions(dates, day_count);
+    Self {
+      netted: NettedFlow::new(&deltas, amounts),
       amounts: amounts.to_vec(),
-      deltas: year_fractions(dates, day_count),
+      deltas,
       scale: gross_size(amounts),
-    })
+    }
   }
 
   /// `XNPV(rate) = sum over i of amount_i * (1 + rate)^-delta_i`
@@ -298,11 +668,59 @@ impl CashFlow {
 
   /// Is `rate` a true root, within the relative residual tolerance?
   fn is_root(&self, rate: f64) -> bool {
-    rate.is_finite() && self.xnpv(rate).abs() <= self.residual_tolerance()
+    if !rate.is_finite() || rate <= -1.0 {
+      return false;
+    }
+    let residual = self.xnpv(rate);
+    let tolerance = self.residual_tolerance(rate);
+    if residual.is_finite() && tolerance.is_finite() {
+      return residual.abs() <= tolerance;
+    }
+    // Rate-space evaluation overflowed. The log-space form cannot, because
+    // every term there is scaled by the dominant one, so fall back to it
+    // rather than discard a root for being large.
+    let u = to_log_rate(rate);
+    let value = self.netted.scaled_g(u).0;
+    let magnitude = self.netted.scaled_gross(u);
+    value.is_finite() && magnitude.is_finite() && value.abs() <= RESIDUAL_REL_TOL * magnitude
   }
 
-  fn residual_tolerance(&self) -> f64 {
-    RESIDUAL_REL_TOL * self.scale
+  /// How large `|XNPV(rate)|` is allowed to be for `rate` to count as a root.
+  ///
+  /// Scaled by the larger of the gross cash flow and the gross **discounted**
+  /// cash flow at this rate. Both floors are needed, and for different
+  /// reasons:
+  ///
+  /// - `scale` alone was the previous rule. It is correct for `rate >= 0`,
+  ///   where every discount factor is `<= 1` and the discounted flow can only
+  ///   be smaller, so it keeps the published audit condition exact there.
+  /// - It is **wrong** for rates near total loss. A nine-year flow at
+  ///   `r = -0.998` discounts by `(1 + r)^-9 ~ 1e26`, so `XNPV` is a
+  ///   difference of terms around `1e30` and the smallest residual `f64` can
+  ///   express is about `1e14` - eleven orders of magnitude above a tolerance
+  ///   of `1e-9 x 4e5`. That test cannot be satisfied by any solver at any
+  ///   iteration count. It is the same defect as an absolute epsilon, one
+  ///   level up: the yardstick was itself scale-dependent.
+  ///
+  /// Taking the larger of the two means the tolerance is never tighter than
+  /// the floating-point noise of the quantity actually being measured.
+  fn residual_tolerance(&self, rate: f64) -> f64 {
+    RESIDUAL_REL_TOL * self.scale.max(self.discounted_gross(rate))
+  }
+
+  /// `Σ |amountᵢ| · (1 + rate)^-δᵢ`: the size of the sum `xnpv` forms, as
+  /// opposed to the size of the cash flow that went into it.
+  fn discounted_gross(&self, rate: f64) -> f64 {
+    if rate <= -1.0 {
+      return f64::INFINITY;
+    }
+    let base = 1.0 + rate;
+    self
+      .amounts
+      .iter()
+      .zip(&self.deltas)
+      .map(|(amount, &delta)| amount.abs() * base.powf(-delta))
+      .sum()
   }
 
   /// Phase 1. Newton in the exact order a spreadsheet performs it.
@@ -311,38 +729,190 @@ impl CashFlow {
     newton_excel_order(guess, &|rate| self.xnpv_with_deriv(rate))
   }
 
+  /// The whole pipeline: Phase 0, then Phase 1, then Phase 2 if the policy
+  /// asks for it. `NaN` where no rate is produced; [`xirr_outcome`] names why.
+  fn solve(&self, guess: f64, policy: RootPolicy) -> f64 {
+    // Phase 1 always runs first: every policy either returns its answer or
+    // needs to know that it failed.
+    let spreadsheet_rate = self.solve_like_a_spreadsheet(guess);
+
+    match policy {
+      RootPolicy::SpreadsheetCompat => spreadsheet_rate,
+
+      RootPolicy::SpreadsheetThenRobust if spreadsheet_rate.is_finite() => spreadsheet_rate,
+      RootPolicy::SpreadsheetThenRobust => self.solve_robustly(guess),
+
+      // These two ignore Phase 1's choice but still fall back to it when no
+      // root can be enumerated, so they never lose an answer the default
+      // would find.
+      RootPolicy::Lowest => self.roots().first().copied().unwrap_or(spreadsheet_rate),
+      RootPolicy::ClosestToGuess => closest_to(&self.roots(), guess).unwrap_or(spreadsheet_rate),
+    }
+  }
+
   /// Phase 2. Reached only when Phase 1 returned `NaN`, so it can add answers
   /// but never change one a spreadsheet would have given.
+  ///
+  /// `guess` is a **hint only** here, unlike on the parity path where it is
+  /// contractual. The bracketed search runs first and ignores it entirely, so
+  /// a caller's bad guess cannot cost an answer that exists.
   fn solve_robustly(&self, guess: f64) -> f64 {
+    if self.netted.shape() == Shape::NoRootExists {
+      return f64::NAN;
+    }
     if let Some(root) = closest_to(&self.roots(), guess) {
       return root;
     }
-    // Bracketing missed it - a root can hide between grid points where the
-    // function only just crosses zero. Try Newton from a spread of seeds.
-    std::iter::once(guess)
-      .chain(FALLBACK_SEEDS)
-      .map(|seed| {
-        newton_to_residual(
-          seed,
-          &|rate| self.xnpv_with_deriv(rate),
-          self.residual_tolerance(),
-        )
-      })
+    // Bracketing missed it: with an even number of sign changes a root can be
+    // tangential, or hide between grid nodes where the function only just
+    // crosses zero. Newton in log-rate space from a spread of seeds is the
+    // last resort - and `guess` gets its turn first.
+    std::iter::once(to_log_rate(guess))
+      .chain(FALLBACK_SEEDS.into_iter().map(to_log_rate))
+      .chain(FALLBACK_LOG_SEEDS)
+      .filter(|u| u.is_finite())
+      .map(|u| self.newton_from(u))
       .find(|rate| self.is_root(*rate))
       .unwrap_or(f64::NAN)
   }
 
-  /// Every root in `(-1, MAX_SEARCHED_RATE]`, ascending and deduplicated.
-  fn roots(&self) -> Vec<f64> {
-    let xnpv = |rate| self.xnpv(rate);
+  /// Newton in log-rate space from `u`, converted back to a rate.
+  fn newton_from(&self, u: f64) -> f64 {
+    // The residual tolerance is a money quantity and `scaled_g` is money
+    // multiplied by an unknown positive constant, so it is not directly
+    // comparable. Passing 0.0 makes the iteration run to its step tolerance
+    // instead, and `is_root` then judges the answer in rate space where the
+    // tolerance means something.
+    from_log_rate(newton_to_residual(u, &|u| self.netted.scaled_g(u), 0.0))
+  }
 
-    let mut roots: Vec<f64> = find_brackets(&xnpv, MAX_SEARCHED_RATE)
+  /// Turning points of `G` inside the searched domain: the `u` where `G'`
+  /// changes sign, refined by the same bracketing the value uses.
+  ///
+  /// This is what makes an **even** number of sign changes tractable. With an
+  /// odd number the two domain limits differ, so a grid spanning the domain
+  /// must contain a bracket and Brent cannot fail. With an even number roots
+  /// arrive in pairs, and a pair is invisible to a sign-change scan of `G` in
+  /// two ways:
+  ///
+  /// - both roots fall inside one grid cell, so `G` carries the same sign at
+  ///   the two nodes that straddle them;
+  /// - the curve touches zero without crossing - a double root - so no
+  ///   bracket exists anywhere, at any resolution.
+  ///
+  /// One observation covers both. Between two roots `G'` must change sign, and
+  /// at a double root `G'` is zero. So every root that a scan of `G` can miss
+  /// has a turning point at or between the pair, and `G'` *does* change sign
+  /// there even where `G` does not. Feeding those points back into the grid
+  /// splits the offending cell, after which each root brackets normally.
+  ///
+  /// Nearly free: [`NettedFlow::scaled_g`] already computes the derivative
+  /// alongside the value, so only the refinement is new work.
+  fn turning_points(&self, grid: &[f64]) -> Vec<f64> {
+    let dg = |u| self.netted.scaled_g(u).1;
+    find_crossings(grid, &dg)
       .into_iter()
-      .map(|(lo, hi)| brentq(&xnpv, lo, hi, 100))
+      .map(|crossing| match crossing {
+        Crossing::Bracket(lo, hi) => brentq(&dg, lo, hi, 100),
+        Crossing::Exact(u) => u,
+      })
+      .filter(|u| u.is_finite())
+      .collect()
+  }
+
+  /// Every root in `(-1, f64::MAX]`, ascending and deduplicated.
+  ///
+  /// Searches in `u = ln(1 + r)`, so the reachable range is the representable
+  /// range rather than a constant someone chose. Two guarantees follow:
+  ///
+  /// - With an odd number of sign changes, `G` has opposite signs at the two
+  ///   ends of the domain, so the grid **must** contain a bracket and Brent
+  ///   **must** converge. Failure to return a root then proves the root is
+  ///   not representable, not that the search was too coarse.
+  /// - With `n` sign changes there are at most `n` roots, so the search stops
+  ///   as soon as `n` have been found.
+  fn roots(&self) -> Vec<f64> {
+    if self.netted.shape() == Shape::NoRootExists {
+      return Vec::new();
+    }
+    let g = |u| self.netted.scaled_g(u).0;
+    // `.max(1)`: a flow containing a non-finite amount can net to zero sign
+    // changes without that proving anything, and a bound of zero would stop
+    // the loop before it started. Such a flow yields no roots anyway - `xnpv`
+    // is NaN, so `is_root` rejects everything - but the loop should read
+    // correctly rather than rely on that.
+    let descartes_bound = self.netted.sign_changes().max(1);
+
+    // Refine the grid at the turning points before bracketing anything: a
+    // cell holding a pair of roots has one between them, and splitting there
+    // turns a pair the scan cannot see into two ordinary brackets. See
+    // [`CashFlow::turning_points`] for why this is the whole even-sign-change
+    // case.
+    let mut grid = log_rate_grid();
+    let extrema = self.turning_points(&grid);
+    grid.extend_from_slice(&extrema);
+    grid.sort_by(f64::total_cmp);
+    grid.dedup();
+
+    let mut in_u: Vec<f64> = Vec::new();
+    for crossing in find_crossings(&grid, &g) {
+      let u = match crossing {
+        Crossing::Bracket(lo, hi) => brentq(&g, lo, hi, 100),
+        Crossing::Exact(u) => u,
+      };
+      if u.is_finite() {
+        in_u.push(u);
+      }
+      if in_u.len() >= descartes_bound {
+        break; // Descartes: there cannot be another one.
+      }
+    }
+
+    // A double root is a turning point that no bracket contains, so it has to
+    // be offered as a candidate rather than found. The `is_root` filter below
+    // is what decides whether it is real: a turning point that merely comes
+    // close to zero fails it, exactly as a bracketed candidate would. No new
+    // tolerance is needed and none is introduced.
+    //
+    // Only turning points that no pair of roots straddles are offered.
+    // Between two simple roots there is always a turning point and it is not
+    // itself a root, so offering it would report a third root in the middle of
+    // a pair - which is what a near-double root looks like from the outside.
+    // A genuinely tangential root has no such pair around it, precisely
+    // because the curve never crossed.
+    //
+    // Testing the neighbouring grid nodes instead does not work: the pair can
+    // be narrower than one cell, which is the case this whole mechanism exists
+    // for, and then both neighbours sit outside the pair and carry the same
+    // sign. The roots already found are the only reliable witnesses.
+    //
+    // Known blind spot: a tangential root lying between two simple roots is
+    // skipped. It needs at least four sign changes and a curve that touches
+    // zero exactly between two crossings without the touch being one of them.
+    // `xirr` still answers such a flow; only the enumeration is short by one.
+    in_u.sort_by(f64::total_cmp);
+    let straddled_by_a_pair = |u: f64| {
+      let below = in_u.partition_point(|root| *root < u);
+      below > 0 && below < in_u.len()
+    };
+    in_u.extend(
+      extrema
+        .into_iter()
+        .filter(|u| !straddled_by_a_pair(*u))
+        .collect::<Vec<_>>(),
+    );
+
+    // Deduplicate in `u`, where the tolerance is scale-free, before the
+    // conversion collapses distinguishable large rates onto each other.
+    in_u.sort_by(f64::total_cmp);
+    in_u.dedup_by(|a, b| (*a - *b).abs() <= DISTINCT_ROOT_U_TOL);
+
+    let mut roots: Vec<f64> = in_u
+      .into_iter()
+      .map(from_log_rate)
       .filter(|rate| self.is_root(*rate))
       .collect();
-
-    roots.sort_by(|a, b| a.partial_cmp(b).expect("is_root filtered out non-finite"));
+    roots.sort_by(f64::total_cmp);
     roots.dedup_by(|a, b| (*a - *b).abs() <= DISTINCT_ROOT_TOL);
     roots
   }
@@ -368,6 +938,24 @@ fn year_fractions(dates: &[DateLike], day_count: Option<DayCount>) -> Vec<f64> {
     .iter()
     .map(|date| year_fraction(first, date, convention))
     .collect()
+}
+
+/// `r -> u = ln(1 + r)`. `NaN` outside the domain, which the seed filter drops.
+fn to_log_rate(rate: f64) -> f64 {
+  rate.ln_1p()
+}
+
+/// `u -> r = expm1(u)`, clamped to the searched domain first.
+///
+/// `expm1` rather than `exp(u) - 1` because near `u = 0` - which is where
+/// almost every real IRR lives - the subtraction cancels away the significant
+/// digits and `exp(1e-17) - 1` is exactly `0.0`.
+fn from_log_rate(u: f64) -> f64 {
+  if !u.is_finite() {
+    return f64::NAN;
+  }
+  u.clamp(MIN_SEARCHED_LOG_RATE, MAX_SEARCHED_LOG_RATE)
+    .exp_m1()
 }
 
 /// Sum of absolute amounts, floored at 1.0 so sub-unit cash flows are not held
@@ -497,12 +1085,32 @@ mod tests {
   }
 
   #[test]
-  fn sign_changes_ignores_zeros_and_non_finite() {
-    assert_eq!(sign_changes(&[-1., 0., 0., 3.]), 1);
-    assert_eq!(sign_changes(&[-1., 2., -3.]), 2);
-    assert_eq!(sign_changes(&[1., 2., 3.]), 0);
-    assert_eq!(sign_changes(&[]), 0);
-    assert_eq!(sign_changes(&[-1., f64::NAN, 3.]), 1);
+  fn sign_changes_nets_by_date_before_counting() {
+    let count = |rows: &[(&str, f64)]| {
+      let (d, a) = cash_flow(rows);
+      sign_changes(&d, &a, None).unwrap()
+    };
+
+    // Zeros and repeats collapse.
+    assert_eq!(count(&[("2020-01-01", -1.), ("2021-01-01", 0.)]), 0);
+    assert_eq!(
+      count(&[("2020-01-01", -1.), ("2020-06-01", 0.), ("2021-01-01", 3.)]),
+      1
+    );
+    assert_eq!(
+      count(&[("2020-01-01", -1.), ("2021-01-01", 2.), ("2022-01-01", -3.)]),
+      2
+    );
+
+    // Same date: the two amounts are one flow, so this is +9000 alone and
+    // there is no sign change at all. Counting the raw amounts says 1.
+    assert_eq!(count(&[("2023-01-01", -11000.), ("2023-01-01", 20000.)]), 0);
+
+    // Out of input order: sorting by date turns one raw change into two.
+    assert_eq!(
+      count(&[("2020-01-01", -1.), ("2020-06-01", -5.), ("2020-03-01", 3.)]),
+      2
+    );
   }
 
   #[test]

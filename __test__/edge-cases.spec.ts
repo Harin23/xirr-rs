@@ -10,7 +10,10 @@
  */
 import test from 'ava'
 
-import { xirr, xnpv, xirrAllRoots, signChanges } from '../index.js'
+// `xirr` now returns a XirrResult; `xirrRate` is the old `number | null`
+// shape. These assertions are about the numbers, so they use `xirrRate`.
+// The result object itself is covered in outcomes.spec.ts.
+import { xirrRate as xirr, xnpv, xirrAllRoots, signChanges } from '../index.js'
 
 /** UTC midnight for an ISO date. XIRR truncates to the calendar day. */
 const day = (iso: string) => Date.parse(`${iso}T00:00:00Z`)
@@ -249,11 +252,11 @@ test('xirr returns one of the roots xirrAllRoots reports', (t) => {
 
 test('signChanges predicts when the root is unique', (t) => {
   const simple = flow(SIMPLE)
-  t.is(signChanges(simple[1]), 1)
+  t.is(signChanges(simple[0], simple[1]), 1)
   t.is(xirrAllRoots(...simple).length, 1)
 
   const multi = flow(THREE_ROOTS)
-  t.is(signChanges(multi[1]), 3)
+  t.is(signChanges(multi[0], multi[1]), 3)
   t.true(xirrAllRoots(...multi).length > 1)
 })
 
@@ -290,7 +293,7 @@ test('policies agree when the root is unique', (t) => {
   // path reaches it by Newton and the enumerating policies by Brent, so they
   // land within a ULP of each other but not on the same bit pattern.
   const [dates, amounts] = flow(SIMPLE)
-  t.is(signChanges(amounts), 1)
+  t.is(signChanges(dates, amounts), 1)
 
   const rates = (['spreadsheet', 'spreadsheetThenRobust', 'lowest', 'closestToGuess'] as const).map((p) =>
     xirr(dates, amounts, null, null, p),

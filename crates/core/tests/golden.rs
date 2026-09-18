@@ -174,7 +174,7 @@ fn single_sign_change_implies_a_unique_root() {
   // (-1, inf), so no policy can disagree with any other. Pins the fast path.
   let cases = load_cases();
   for (id, c) in &cases {
-    if sign_changes(&c.amounts) > 1 {
+    if sign_changes(&c.dates, &c.amounts, None).unwrap() > 1 {
       continue;
     }
     let roots = xirr_all_roots(&c.dates, &c.amounts, None).unwrap();
