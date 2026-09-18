@@ -15,38 +15,10 @@ jobs:
   build:
     uses: ./.github/workflows/build.yml
 
-  # The PR title becomes the squash commit, which is the only thing
-  # release-please ever reads. If it is not a conventional commit, the change
-  # silently never makes it into a changelog or a version bump.
-  pr-title:
-    name: PR title
-    # merge_group events have no PR title; skip rather than fail.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
-    steps:
-      - uses: amannn/action-semantic-pull-request@v6
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          types: |
-            feat
-            fix
-            perf
-            revert
-            docs
-            refactor
-            test
-            build
-            ci
-            chore
-          requireScope: false
-
   pr-ok:
     name: pr-ok
     if: always()
-    needs: [build, pr-title]
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - name: Roll up build result

@@ -83,6 +83,8 @@ version numbers can never be reused, so a bad one is spent either way.
   not just publish to existing ones. A granular token scoped to `xirr-rs` alone
   will fail on the platform packages.
 - Nothing else; the GitHub release uses the built-in `GITHUB_TOKEN`.
+- **Settings → Actions → General → "Allow GitHub Actions to create and approve
+  pull requests" must be enabled**, or release-please cannot open its PR at all.
 
 npm caps write tokens at 90 days, so this one will expire and releases will
 start failing on a schedule. The permanent fix is trusted publishing, which has
@@ -110,8 +112,13 @@ not "fix" them — nothing reads them.
 That is all. The platform package is generated from the target name, and npm
 works out who should receive it.
 
-## One thing that would break this
+## Two things that would break this
 
-Do not add `--locked` or `--frozen` to any `cargo` step in CI. Nothing bumps
+**Never run `npm publish --dry-run` in this repo.** `--dry-run` still executes
+the `prepublishOnly` lifecycle script, which is `napi prepublish` — and that
+really publishes the seven platform packages. It is not a preview. To inspect
+what would ship, use `npm pack --dry-run --ignore-scripts`.
+
+**Do not add `--locked` or `--frozen` to any `cargo` step in CI.** Nothing bumps
 `Cargo.lock` any more, so it is allowed to sit slightly behind; a locked build
 would start failing the first time a dependency moves.
