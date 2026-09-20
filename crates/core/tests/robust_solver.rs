@@ -160,7 +160,9 @@ fn the_boundary_outflow_is_the_one_this_test_thinks_it_is() {
   // Guards the constant above: if `nextafter` moved, the "smallest solvable
   // outflow" case would silently become an ordinary one.
   assert_eq!(SMALLEST_SOLVABLE_OUTFLOW.to_bits(), 0x40d3_8800_0000_0001);
-  assert!(SMALLEST_SOLVABLE_OUTFLOW > 20_000.0);
+  // `> 20_000.0` is not asserted separately: for positive floats the next bit
+  // pattern up is the next representable value, so the assertion below states
+  // it exactly rather than approximately.
   assert_eq!(
     20_000.0f64.to_bits() + 1,
     SMALLEST_SOLVABLE_OUTFLOW.to_bits()
@@ -1147,7 +1149,7 @@ fn a_tangential_root_is_found_even_though_nothing_brackets_it() {
     0.0f64,   // lands exactly on a grid node - the easy case
     0.005,    // mid-cell in the dense band
     -0.003,   //
-    3.141_59, // nowhere near a node
+    3.273_41, // nowhere near a node
     -4.567, 7.5, // just outside the dense band, where the step widens to 0.5
   ] {
     let x0 = (-u0).exp();
@@ -1186,6 +1188,9 @@ fn xirr_and_the_enumeration_agree_on_even_sign_changes() {
   // never produces a close root pair. This is the same contract - any rate
   // `xirr` produces must appear in the enumeration - over the case that
   // family does not reach.
+  // The groups spell a word rather than marking byte boundaries, and the seed
+  // pins which cases this sweep covers, so it is not repacked to even groups.
+  #[allow(clippy::unusual_byte_groupings)]
   let mut rng = Rng(0x0DDB_A11_5EED_0002);
   let mut checked = 0usize;
 

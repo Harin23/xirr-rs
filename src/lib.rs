@@ -75,6 +75,7 @@ fn invalid(e: fin::InvalidPaymentsError) -> Error {
 /// | --------------------- | -------- | ------------------------------------------------ |
 /// | `root`                | the rate | one rate solves the cash flow                    |
 /// | `multipleRoots`       | the pick | several do; `roots` lists them all                |
+/// | `unverifiedRate`      | the rate | the spreadsheet's answer is **not** a root       |
 /// | `noRootExists`        | `null`   | **proved**: no rate can solve this cash flow      |
 /// | `didNotConverge`      | `null`   | a root may exist; the solver did not produce one  |
 /// | `spreadsheetNumError` | `null`   | `#NUM!` reproduced under the `spreadsheet` policy |
@@ -82,10 +83,19 @@ fn invalid(e: fin::InvalidPaymentsError) -> Error {
 /// The last three were a single `null` before this release, which meant a
 /// caller could not tell a data-quality problem in their own ledger from a
 /// solver failure from a faithfully reproduced spreadsheet error.
+///
+/// `unverifiedRate` is the one status that carries a rate you should not post
+/// without looking. Spreadsheets stop iterating as soon as either the step or
+/// the residual is small, against an absolute epsilon, so they occasionally
+/// return a point that `XNPV` never actually reaches zero at. `rate` is that
+/// answer, reproduced faithfully so your report still ties out to the
+/// workbook; `roots` holds whatever is genuinely a root, and a non-empty
+/// `roots` here means the spreadsheet picked a number that is not one of
+/// them.
 #[napi(object)]
 pub struct XirrResult {
   #[napi(
-    ts_type = "'root' | 'multipleRoots' | 'noRootExists' | 'didNotConverge' | 'spreadsheetNumError'"
+    ts_type = "'root' | 'multipleRoots' | 'unverifiedRate' | 'noRootExists' | 'didNotConverge' | 'spreadsheetNumError'"
   )]
   pub status: String,
   /// The rate, or `null` for every failure status. Never `NaN`.
@@ -97,6 +107,8 @@ pub struct XirrResult {
   /// Every root found, ascending. Empty for every failure status. A length
   /// above one means the IRR is genuinely ambiguous and `rate` is a
   /// convention, not a fact.
+  ///
+  /// Under `unverifiedRate` this is the list `rate` failed to join.
   pub roots: Vec<f64>,
 }
 
@@ -106,6 +118,9 @@ impl From<fin::XirrOutcome> for XirrResult {
       fin::XirrOutcome::Root(r) => ("root", Either::A(r), vec![r]),
       fin::XirrOutcome::MultipleRoots { selected, all } => {
         ("multipleRoots", Either::A(selected), all)
+      }
+      fin::XirrOutcome::UnverifiedRate { rate, roots } => {
+        ("unverifiedRate", Either::A(rate), roots)
       }
       fin::XirrOutcome::NoRootExists => ("noRootExists", Either::B(Null), Vec::new()),
       fin::XirrOutcome::DidNotConverge => ("didNotConverge", Either::B(Null), Vec::new()),

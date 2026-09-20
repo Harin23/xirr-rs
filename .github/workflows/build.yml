@@ -54,7 +54,13 @@ jobs:
       - name: Cargo fmt
         run: cargo fmt -- --check
       - name: Clippy
-        run: cargo clippy
+        # `--workspace --all-targets`, not bare `cargo clippy`: the root
+        # manifest has its own `[package]`, so a bare run lints only the napi
+        # crate and treats xirr-core as an ordinary dependency - the whole
+        # test suite goes unlinted. A deny-by-default lint (approx_constant)
+        # sat in tests/robust_solver.rs through a full green CI run because of
+        # this.
+        run: cargo clippy --workspace --all-targets
       - name: Cargo test
         run: cargo test -p xirr-core
   build:

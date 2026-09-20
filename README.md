@@ -5,7 +5,8 @@
 A native (Rust) implementation of `XIRR` — the internal rate of return for an
 irregular schedule of cash flows — built to match Excel, Google Sheets and
 LibreOffice Calc, **including which root they pick when a cash flow has more
-than one valid IRR**.
+than one valid IRR**, and to tell you when the rate they picked is not actually
+a root.
 
 ```bash
 npm install xirr-rs
@@ -108,21 +109,45 @@ day count / policy string is unrecognised.
 Net present value at a given rate. Unlike `xirr` it does not require both signs,
 so you can use it to check the residual of any rate:
 
+**You no longer need to do this to find out whether a rate is a root** — the
+`status` tells you. A rate that fails the library's own check comes back as
+`unverifiedRate`, never as `root`:
+
 ```js
-const { rate } = xirr(dates, amounts)
-const gross = amounts.reduce((s, a) => s + Math.abs(a), 0)
-const isTrueRoot = Math.abs(xnpv(rate, dates, amounts)) < 1e-9 * gross
+const res = xirr(dates, amounts)
+if (res.status === 'root') {
+  post(res.rate) // already verified
+}
 ```
 
-For rates near total loss, compare against the **discounted** gross instead —
-`xnpv(rate, dates, amounts.map(Math.abs))`. At `r = -0.998` over nine years the
-discount factors reach `1e26`, so the smallest residual an `f64` can express is
-about `1e14` and the undiscounted test cannot be satisfied by any solver. The
-library uses the larger of the two scales for exactly this reason.
+If you want to run the check yourself, this is the one the library runs. Note
+the guard: `rate` is `null` for every failure status, and `xnpv` takes a
+`number`.
 
-Worth doing: spreadsheets use a weak convergence test and occasionally return a
-rate that is not actually a root. This package reproduces that faithfully — see
-[Fidelity, not correction](#fidelity-not-correction).
+```js
+const res = xirr(dates, amounts)
+if (res.rate !== null) {
+  // Net payments that share a date first - they are one term of XNPV however
+  // they were entered - then divide by the size of the terms actually being
+  // summed at this rate.
+  const residual = Math.abs(xnpv(res.rate, dates, amounts))
+  const terms = xnpv(res.rate, dates, amounts.map(Math.abs))
+  const isTrueRoot = residual <= 1e-9 * terms
+}
+```
+
+Dividing by the **discounted** terms rather than the gross cash flow is what
+makes this work at both ends of the range. At `r = -0.998` over nine years the
+discount factors reach `1e26`, so the smallest residual an `f64` can express is
+about `1e14` — an absolute or gross-relative test is unsatisfiable there. At the
+other end, a flow whose day-zero payments cancel has terms that vanish as the
+rate grows, and a gross-relative test passes for *every* large rate, on a cash
+flow with no root at all.
+
+Spreadsheets use a weak convergence test and occasionally return a rate that is
+not actually a root. This package reproduces that rate faithfully — see
+[Fidelity, not correction](#fidelity-not-correction) — and reports it as
+`unverifiedRate` so it is never mistaken for an answer.
 
 ### `xirrAllRoots(dates, amounts, dayCountConvention?)`
 
@@ -173,6 +198,7 @@ different responses, and one of them is a bug in your own data:
 | --------------------- | -------- | ---------------------------------------------------- | ---------------------- |
 | `root`                | the rate | One rate solves the cash flow.                        | Use it.                |
 | `multipleRoots`       | the pick | Several do; `roots` lists them all.                   | Report the ambiguity.  |
+| `unverifiedRate`      | the rate | The spreadsheet's answer is **not** a root.           | Do not post unchecked. |
 | `noRootExists`        | `null`   | **Proved**: no rate can solve this flow, at all.      | Reject the input.      |
 | `didNotConverge`      | `null`   | A root may exist; the solver did not produce one.     | Escalate.              |
 | `spreadsheetNumError` | `null`   | `#NUM!` reproduced under the `spreadsheet` policy.    | Retry without parity.  |
@@ -291,6 +317,12 @@ xirr(dates, amounts, null, null, 'lowest')
 The default is deliberately conservative: it can _add_ an answer where a
 spreadsheet gives up, but it can never _change_ one.
 
+The bottom two are the correctness-over-parity pair, and they mean it: if no
+root can be verified they return `null` rather than fall back to a spreadsheet
+rate that fails the check. The top two never return `null` where a spreadsheet
+returned a number — they report `unverifiedRate` instead, so the number is
+still there and still ties out to the workbook.
+
 ```js
 const flow = [
   [Date.UTC(2015, 0, 1), -1000],
@@ -322,9 +354,53 @@ This package reproduces that behaviour rather than fixing it. Returning a
 "better" answer than Excel would mean your report and your workbook disagree,
 which is the problem this package exists to solve.
 
-If you want correctness over parity you have two options: check the residual
-with `xnpv()`, or use `'lowest'` / `'closestToGuess'`, which enumerate roots
-properly instead of following the spreadsheet's path.
+**But it tells you.** Every rate is independently checked before it is
+described: XNPV is back-calculated at the answer and compared against the size
+of the terms actually being summed there. A rate that fails comes back as
+`unverifiedRate`, never as `root`. So parity and correctness stop competing —
+you get the spreadsheet's number *and* the knowledge that it is not a root, and
+you decide which matters for the report you are writing.
+
+```js
+const res = xirr(dates, amounts)
+
+switch (res.status) {
+  case 'root':
+  case 'multipleRoots':
+    post(res.rate) // already verified
+    break
+  case 'unverifiedRate':
+    // Matches the workbook. Is not a root. Your call.
+    flagForReview(res.rate, res.roots)
+    break
+  default:
+    escalate(res.status)
+}
+```
+
+`roots` is the useful part of that middle case. It holds what verification
+*did* find, so an empty array means no rate solves this flow at all, and a
+non-empty one means the spreadsheet picked a number that is not among the real
+answers — worth escalating, because the gap is usually enormous rather than
+marginal:
+
+```js
+// A capital call and a distribution booked the same day, netting to zero:
+// amounts = [-3254, +3254, +1755, -945, +2565, -559]
+
+xirr(d, a).status // 'unverifiedRate'
+xirr(d, a).rate //  46785040685798.04   <- what the spreadsheet returns
+xirr(d, a).roots // [-0.7709601506]     <- the actual IRR, -77.1%
+```
+
+That shape is not exotic — a same-day call and distribution is among the
+commonest things in a fund ledger. Across a sample of such flows, 57% of
+spreadsheet answers failed verification and 26% of those had a genuine root the
+spreadsheet had missed.
+
+If you want correctness over parity outright, use `'lowest'` / `'closestToGuess'`,
+which enumerate roots properly instead of following the spreadsheet's path. On
+the flow above, both return -77.1%.
 
 There is one place where this package deliberately does better: a spreadsheet's
 rescan grid stops at **-99%**, so a cash flow with an IRR below that returns
@@ -380,6 +456,21 @@ to five sign reversals, and 18 flows with no solution at all.
 
 `__test__/golden/xirr_golden_corpus.xlsx` is included so you can open it in
 Excel or Google Sheets and verify against your own engine.
+
+**Which engine is actually asserted.** Only `expected_libreoffice.csv` is
+checked in, so the 71/71 above is LibreOffice. The test suite picks up
+`expected_excel.csv` and `expected_sheets.csv` automatically if you add them
+(see `scripts/README.md`), and names the missing ones in its output so their
+absence is not mistaken for coverage. Phase 1 is a port of the
+OpenOffice/LibreOffice `getXirr`, which is itself built for Excel
+compatibility, but that is a shared lineage rather than a measurement.
+
+Correctness does not rest on any of this. Every rate the library labels a root
+is checked against the mathematics — `|XNPV(r)|` relative to the terms summed
+at that rate — by `crates/core/tests/verification.rs`, which needs no
+spreadsheet at all. A rate that fails is reported as `unverifiedRate`, which is
+the case a corpus comparison cannot catch anyway: the weak convergence test is
+common to every engine, so they all agree on it.
 
 ---
 

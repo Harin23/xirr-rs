@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import test from 'ava'
 
 // See edge-cases.spec.ts: `xirrRate` is the numeric form of `xirr`.
-import { xirrRate as xirr, xnpv, xirrAllRoots, signChanges } from '../index.js'
+import { xirrRate as xirr, xirr as xirrResult, xnpv, xirrAllRoots, signChanges } from '../index.js'
 
 // Resolved from cwd, not import.meta: this package is CommonJS
 // ("module": "CommonJS", no "type": "module"), so import.meta is unavailable.
@@ -73,6 +73,31 @@ function loadExpected(engine: string): Map<string, number | 'NUM'> | null {
 }
 
 const CASES = loadCases()
+/**
+ * `rho(r) = |XNPV(r)| / sum |term_i(r)|` on the date-netted flow: how much of
+ * the sum actually cancelled. Near 0 the terms genuinely cancelled and the
+ * rate is a root; near 1 nothing cancelled and the "sum" is just its one
+ * surviving term, which is what an asymptote looks like.
+ *
+ * The denominator is `xnpv` over the absolute amounts - it validates only
+ * length, so an all-positive flow is fine - which keeps this in step with the
+ * library's own day-count convention instead of reimplementing it. Netting
+ * first is what makes the ratio meaningful; see crates/core/tests/verification.rs.
+ */
+function rho(rate: number, dates: Float64Array, amounts: Float64Array): number {
+  const netted = new Map<number, number>()
+  for (let i = 0; i < dates.length; i++) {
+    netted.set(dates[i], (netted.get(dates[i]) ?? 0) + amounts[i])
+  }
+  const kept = [...netted.entries()].filter(([, amount]) => amount !== 0)
+  const d = Float64Array.from(kept.map(([date]) => date))
+  const a = Float64Array.from(kept.map(([, amount]) => amount))
+
+  const sum = Math.abs(xnpv(rate, d, a))
+  const gross = xnpv(rate, d, a.map(Math.abs))
+  return sum / gross
+}
+
 const ENGINES = ['libreoffice', 'excel', 'sheets']
 
 function closeEnough(got: number, want: number): boolean {
@@ -135,38 +160,46 @@ for (const engine of ENGINES) {
   })
 
   test(`${engine}: every returned rate is an actual root`, (t) => {
-    // Guards against the weak spreadsheet convergence test silently handing
-    // back a non-root. Reported, not failed, because parity outranks
-    // correctness here by design - but you want to know.
-    const suspect: string[] = []
+    // Now an assertion, not a report. A weakly-converged non-root is no longer
+    // handed back as `status: 'root'` - it comes back as 'unverifiedRate' -
+    // so "the label is honest" is a property that can be enforced rather than
+    // logged. Parity is untouched: this asserts nothing about *which* status a
+    // case gets, only that a claimed root survives back-calculation.
+    const unverified: string[] = []
     for (const [id, want] of expected) {
       const c = CASES.get(id)
       if (!c || want === 'NUM') continue
-      const rate = xirr(c.dates, c.amounts)
-      if (rate === null) continue
-      const gross = c.amounts.reduce((s, a) => s + Math.abs(a), 0)
-      const residual = Math.abs(xnpv(rate, c.dates, c.amounts))
-      if (residual > 1e-6 * Math.max(gross, 1)) {
-        suspect.push(`${id}: |XNPV| = ${residual.toExponential(2)}`)
+
+      const res = xirrResult(c.dates, c.amounts)
+      if (res.status === 'unverifiedRate') {
+        unverified.push(`${id}: rate = ${res.rate?.toExponential(2)}`)
+        continue
       }
+      if (res.rate === null) continue
+
+      const r = rho(res.rate, c.dates, c.amounts)
+      t.true(r <= 1e-9, `${id}: status '${res.status}' claims ${res.rate} is a root, rho = ${r.toExponential(2)}`)
     }
-    t.log(suspect.length ? `weak-convergence rates: ${suspect.join(' | ')}` : 'all rates are true roots')
-    t.pass()
+    t.log(unverified.length ? `unverified rates: ${unverified.join(' | ')}` : 'every rate is a verified root')
   })
 }
 
 // ---------------------------------------------------------------------------
 // 2. Cross-engine agreement, when more than one golden file is present.
 // ---------------------------------------------------------------------------
-test('engines agree with each other where all of them solved', (t) => {
-  const loaded = ENGINES.map((e) => [e, loadExpected(e)] as const).filter(
-    (x): x is readonly [string, Map<string, number | 'NUM'>] => x[1] !== null,
-  )
-  if (loaded.length < 2) {
-    t.log('only one golden file present; add expected_excel.csv to enable')
-    t.pass()
-    return
-  }
+const LOADED_ENGINES = ENGINES.map((e) => [e, loadExpected(e)] as const).filter(
+  (x): x is readonly [string, Map<string, number | 'NUM'>] => x[1] !== null,
+)
+
+// Declared skipped rather than passing green. A ✔ on a comparison that never
+// ran is exactly how the absence of expected_excel.csv stayed invisible: only
+// expected_libreoffice.csv is checked in, so this has never actually compared
+// two engines. AVA reports a declaration-time skip in the summary; `t.pass()`
+// and `t.fail.skip()` both render as a tick.
+const crossEngine = LOADED_ENGINES.length >= 2 ? test : test.skip
+
+crossEngine('engines agree with each other where all of them solved', (t) => {
+  const loaded = LOADED_ENGINES
   const [firstName, first] = loaded[0]
   for (const [name, other] of loaded.slice(1)) {
     for (const [id, a] of first) {

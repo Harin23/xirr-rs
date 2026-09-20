@@ -175,3 +175,69 @@ test('signChanges orders by date before counting', (t) => {
   ])
   t.is(signChanges(dates, amounts), 2)
 })
+
+// ---------------------------------------------------------------------------
+// 4. A rate the spreadsheet produced that is not actually a root
+// ---------------------------------------------------------------------------
+
+/**
+ * Day-zero payments that cancel exactly, then terms with no real root: with
+ * `v = (1 + r)^-1 > 0` this reduces to `v(-1000 + 300v - 50v^2)`, and that
+ * quadratic has discriminant -44. XNPV only *approaches* zero as r grows.
+ *
+ * The spreadsheet algorithm stops on an absolute epsilon of 1e-10, so it walks
+ * out to r ~ 2.4e13, finds |XNPV| = 3.9e-11, and declares victory. We
+ * reproduce that rate - parity - without calling it a root.
+ */
+const ASYMPTOTE: [string, number][] = [
+  ['2020-01-01', -100],
+  ['2020-01-01', 100],
+  ['2021-01-01', -1000],
+  ['2022-01-01', 300],
+  ['2023-01-01', -50],
+]
+
+test('a rate that is not a root is reported as unverifiedRate, not root', (t) => {
+  const [dates, amounts] = flow(ASYMPTOTE)
+  const res = xirr(dates, amounts)
+
+  t.is(res.status, 'unverifiedRate')
+  t.not(res.rate, null)
+  t.deepEqual(res.roots, [], 'nothing was verified, so nothing is listed')
+
+  // Parity intact: the numeric surface still hands back the spreadsheet's rate.
+  t.is(xirrRate(dates, amounts), res.rate)
+
+  // And it really is not a root - XNPV is nowhere near zero relative to the
+  // terms that survive at that rate.
+  t.true(Math.abs(xnpv(res.rate!, dates, amounts)) > 0, 'XNPV should not be exactly zero')
+})
+
+test('the correctness policies return null rather than an unverified rate', (t) => {
+  const [dates, amounts] = flow(ASYMPTOTE)
+  for (const policy of ['lowest', 'closestToGuess'] as const) {
+    t.is(xirrRate(dates, amounts, null, null, policy), null, policy)
+    t.is(xirr(dates, amounts, null, null, policy).rate, null, policy)
+  }
+})
+
+test('status root always means the rate survives back-calculation', (t) => {
+  // The general contract across every shape in this file.
+  const flows: [string, [Float64Array, Float64Array]][] = [
+    ['conventional', flow([['2020-01-01', -1000], ['2021-01-01', 750], ['2022-01-01', 500]])],
+    ['three-root', flow([['2020-01-01', -1000], ['2021-01-01', 2500], ['2022-01-01', -1540]])],
+    ['asymptote', flow(ASYMPTOTE)],
+    ['far-root', series(20_001)],
+  ]
+  for (const [name, [dates, amounts]] of flows) {
+    const res = xirr(dates, amounts)
+    if (res.status !== 'root' && res.status !== 'multipleRoots') continue
+    const gross = Array.from(amounts).reduce((s, a) => s + Math.abs(a), 0)
+    for (const r of [...res.roots, res.rate!]) {
+      t.true(
+        Math.abs(xnpv(r, dates, amounts)) <= 1e-6 * Math.max(gross, 1),
+        `${name}: status '${res.status}' claims ${r} is a root`,
+      )
+    }
+  }
+})

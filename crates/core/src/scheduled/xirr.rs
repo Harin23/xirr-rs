@@ -186,10 +186,11 @@ pub enum RootPolicy {
 pub enum XirrOutcome {
   /// A single rate solves `XNPV(r) = 0`, and this is it.
   ///
-  /// Under [`RootPolicy::SpreadsheetCompat`] this is the spreadsheet's answer
-  /// reproduced verbatim and its residual is **not** checked - see the parity
-  /// contract in the module docs. Under every other policy the rate has passed
-  /// the residual test in [`RESIDUAL_REL_TOL`].
+  /// The rate has passed the residual test in [`RESIDUAL_REL_TOL`] under every
+  /// policy, including the two spreadsheet ones. Parity is preserved by
+  /// *labelling*, not by filtering: a spreadsheet rate that fails the test is
+  /// still returned by [`xirr`], and reported here as
+  /// [`XirrOutcome::UnverifiedRate`] rather than as a root.
   Root(f64),
 
   /// `XNPV(r) = 0` has more than one solution. `selected` is what [`xirr`]
@@ -197,6 +198,22 @@ pub enum XirrOutcome {
   ///
   /// The single number is a **convention**, not a fact. Report the ambiguity.
   MultipleRoots { selected: f64, all: Vec<f64> },
+
+  /// A rate was produced, but it is **not** a verified root: `|XNPV(rate)|` is
+  /// not near zero relative to the terms summed at that rate.
+  ///
+  /// This is the spreadsheet's weak convergence test surfacing. Spreadsheets
+  /// stop as soon as *either* the step *or* the residual is small, both
+  /// against an absolute epsilon, so they can return a point on a flat stretch
+  /// or on an asymptote that `XNPV` never actually reaches. That behaviour is
+  /// reproduced faithfully rather than corrected - see the parity contract in
+  /// the module docs - and named here rather than passed off as a root.
+  ///
+  /// `rate` is what [`xirr`] returns for the same arguments, so parity is
+  /// intact. `roots` is what enumeration actually verified: empty when nothing
+  /// did, and **non-empty when the spreadsheet's answer is simply not one of
+  /// them**, which is the case worth escalating.
+  UnverifiedRate { rate: f64, roots: Vec<f64> },
 
   /// No rate can solve this cash flow, and that is provable rather than
   /// suspected: after netting flows that share a date and discarding zeros,
@@ -237,6 +254,9 @@ impl XirrOutcome {
     match self {
       Self::Root(r) => Some(*r),
       Self::MultipleRoots { selected, .. } => Some(*selected),
+      // A rate *was* produced; the point of the variant is that it is not
+      // labelled a root, not that it is withheld.
+      Self::UnverifiedRate { rate, .. } => Some(*rate),
       _ => None,
     }
   }
@@ -326,9 +346,23 @@ pub fn xirr_outcome(
   // Only a flow with two or more sign changes can have two or more roots
   // (Descartes), so the common case never pays for enumeration.
   if flow.netted.sign_changes() < 2 {
-    return Ok(XirrOutcome::Root(rate));
+    return Ok(if flow.is_root(rate) {
+      XirrOutcome::Root(rate)
+    } else {
+      XirrOutcome::UnverifiedRate {
+        rate,
+        roots: Vec::new(),
+      }
+    });
   }
+
   let all = flow.roots();
+  // Verify before labelling. A rate that reached here is finite, which is the
+  // only thing the gate above established; whether it solves the cash flow is
+  // a separate question and the one the caller is actually asking.
+  if !flow.is_root(rate) {
+    return Ok(XirrOutcome::UnverifiedRate { rate, roots: all });
+  }
   Ok(if all.len() > 1 {
     XirrOutcome::MultipleRoots {
       selected: rate,
@@ -596,8 +630,6 @@ struct CashFlow {
   amounts: Vec<f64>,
   /// Year fractions measured from the **first** payment in input order.
   deltas: Vec<f64>,
-  /// Sum of `|amount|`, floored at 1.0. Scales the residual tolerance.
-  scale: f64,
   /// The same flow netted by year fraction. Phase 0 and Phase 2 use this;
   /// Phase 1 must not, because summation order is part of parity.
   netted: NettedFlow,
@@ -622,7 +654,6 @@ impl CashFlow {
       netted: NettedFlow::new(&deltas, amounts),
       amounts: amounts.to_vec(),
       deltas,
-      scale: gross_size(amounts),
     }
   }
 
@@ -666,61 +697,59 @@ impl CashFlow {
       })
   }
 
-  /// Is `rate` a true root, within the relative residual tolerance?
+  /// Is `rate` a true root?
+  ///
+  /// The test is the **relative cancellation** of the sum, not its absolute
+  /// size:
+  ///
+  /// ```text
+  ///   rho(r) = |SUM a_i (1+r)^-d_i| / SUM |a_i (1+r)^-d_i|
+  /// ```
+  ///
+  /// `rho` lies in `[0, 1]`. Near zero, the terms genuinely cancelled and the
+  /// rate is a root. Near one, nothing cancelled: the "sum" is just its one
+  /// surviving term, which is what an *asymptote* looks like. That distinction
+  /// is the whole job, and no absolute threshold can make it.
+  ///
+  /// Both are measured on [`NettedFlow`], in log-rate space. Netting is
+  /// exact - two payments sharing a year fraction *are* one term of `XNPV` -
+  /// and it is load-bearing here rather than an optimisation. A flow whose
+  /// day-zero payments cancel (`-100, +100`) keeps them in the raw sum, where
+  /// at a large rate they dominate `SUM |term|` while contributing nothing to
+  /// the residual; the ratio is then tiny for every sufficiently large rate
+  /// and the test passes on a cash flow that has no root at all. Measured on
+  /// exactly that flow: `rho = 1.000` netted, `2e-13` un-netted.
+  ///
+  /// This also subsumes the rule it replaced, which took the larger of the
+  /// gross and the *discounted* gross cash flow. That existed so the tolerance
+  /// was never tighter than the floating-point noise of the quantity being
+  /// measured - a real problem near total loss, where `XNPV` is a difference
+  /// of terms around `1e30` and `f64` cannot express a residual below `1e14`.
+  /// Dividing by `SUM |term|` does that natively and exactly: `fuzz/039` in the
+  /// golden corpus has `|XNPV| = 1.008` against terms of `1.6e14`, i.e.
+  /// `rho = 6e-15`, and is correctly accepted.
+  ///
+  /// Log-rate space, finally, cannot overflow - every term there is scaled by
+  /// the dominant one - so there is no second path and no fallback.
   fn is_root(&self, rate: f64) -> bool {
     if !rate.is_finite() || rate <= -1.0 {
       return false;
     }
-    let residual = self.xnpv(rate);
-    let tolerance = self.residual_tolerance(rate);
-    if residual.is_finite() && tolerance.is_finite() {
-      return residual.abs() <= tolerance;
+    // A single non-finite amount makes `xnpv` NaN at *every* rate, so no rate
+    // is verifiable. `netted` has dropped that amount, so consulting it would
+    // answer a question about a cash flow the caller never passed - and answer
+    // it confidently, since the sanitised flow is perfectly well behaved.
+    if self.netted.poisoned {
+      return false;
     }
-    // Rate-space evaluation overflowed. The log-space form cannot, because
-    // every term there is scaled by the dominant one, so fall back to it
-    // rather than discard a root for being large.
     let u = to_log_rate(rate);
     let value = self.netted.scaled_g(u).0;
     let magnitude = self.netted.scaled_gross(u);
-    value.is_finite() && magnitude.is_finite() && value.abs() <= RESIDUAL_REL_TOL * magnitude
-  }
-
-  /// How large `|XNPV(rate)|` is allowed to be for `rate` to count as a root.
-  ///
-  /// Scaled by the larger of the gross cash flow and the gross **discounted**
-  /// cash flow at this rate. Both floors are needed, and for different
-  /// reasons:
-  ///
-  /// - `scale` alone was the previous rule. It is correct for `rate >= 0`,
-  ///   where every discount factor is `<= 1` and the discounted flow can only
-  ///   be smaller, so it keeps the published audit condition exact there.
-  /// - It is **wrong** for rates near total loss. A nine-year flow at
-  ///   `r = -0.998` discounts by `(1 + r)^-9 ~ 1e26`, so `XNPV` is a
-  ///   difference of terms around `1e30` and the smallest residual `f64` can
-  ///   express is about `1e14` - eleven orders of magnitude above a tolerance
-  ///   of `1e-9 x 4e5`. That test cannot be satisfied by any solver at any
-  ///   iteration count. It is the same defect as an absolute epsilon, one
-  ///   level up: the yardstick was itself scale-dependent.
-  ///
-  /// Taking the larger of the two means the tolerance is never tighter than
-  /// the floating-point noise of the quantity actually being measured.
-  fn residual_tolerance(&self, rate: f64) -> f64 {
-    RESIDUAL_REL_TOL * self.scale.max(self.discounted_gross(rate))
-  }
-
-  /// `Σ |amountᵢ| · (1 + rate)^-δᵢ`: the size of the sum `xnpv` forms, as
-  /// opposed to the size of the cash flow that went into it.
-  fn discounted_gross(&self, rate: f64) -> f64 {
-    if rate <= -1.0 {
-      return f64::INFINITY;
-    }
-    let base = 1.0 + rate;
-    self
-      .amounts
-      .iter()
-      .zip(&self.deltas)
-      .map(|(amount, &delta)| amount.abs() * base.powf(-delta))
-      .sum()
+    // `magnitude > 0.0` rather than `is_finite`: a flow that nets away to
+    // nothing has `XNPV = 0` identically, and every rate would "pass". Such a
+    // flow is `Shape::NoRootExists` and never reaches here, but the predicate
+    // should not depend on that.
+    value.is_finite() && magnitude > 0.0 && value.abs() <= RESIDUAL_REL_TOL * magnitude
   }
 
   /// Phase 1. Newton in the exact order a spreadsheet performs it.
@@ -744,9 +773,27 @@ impl CashFlow {
 
       // These two ignore Phase 1's choice but still fall back to it when no
       // root can be enumerated, so they never lose an answer the default
-      // would find.
-      RootPolicy::Lowest => self.roots().first().copied().unwrap_or(spreadsheet_rate),
-      RootPolicy::ClosestToGuess => closest_to(&self.roots(), guess).unwrap_or(spreadsheet_rate),
+      // would find - provided that answer is a root. These are the two
+      // policies sold as correctness over parity, so handing back a rate that
+      // fails `is_root` is the one thing they must not do: it is precisely the
+      // spreadsheet artefact the caller chose them to avoid.
+      RootPolicy::Lowest => self
+        .roots()
+        .first()
+        .copied()
+        .unwrap_or_else(|| self.verified_or_nan(spreadsheet_rate)),
+      RootPolicy::ClosestToGuess => {
+        closest_to(&self.roots(), guess).unwrap_or_else(|| self.verified_or_nan(spreadsheet_rate))
+      }
+    }
+  }
+
+  /// `rate` if it survives [`CashFlow::is_root`], `NaN` otherwise.
+  fn verified_or_nan(&self, rate: f64) -> f64 {
+    if self.is_root(rate) {
+      rate
+    } else {
+      f64::NAN
     }
   }
 
@@ -956,17 +1003,6 @@ fn from_log_rate(u: f64) -> f64 {
   }
   u.clamp(MIN_SEARCHED_LOG_RATE, MAX_SEARCHED_LOG_RATE)
     .exp_m1()
-}
-
-/// Sum of absolute amounts, floored at 1.0 so sub-unit cash flows are not held
-/// to an impossible tolerance.
-fn gross_size(amounts: &[f64]) -> f64 {
-  amounts
-    .iter()
-    .filter(|a| a.is_finite())
-    .map(|a| a.abs())
-    .sum::<f64>()
-    .max(1.0)
 }
 
 /// Spreadsheets raise `#NUM!` if any date precedes the first one rather than

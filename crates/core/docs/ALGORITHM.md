@@ -397,22 +397,72 @@ interchangeable.**
 The `EXCEL_*` constants live in `optimize.rs` beside the code that uses them and
 must match upstream exactly.
 
-### Why the residual scale is a maximum of two things
+### Why the residual test is a ratio, not a tolerance
 
-`RESIDUAL_REL_TOL × gross_size` was the previous rule. It is correct for
-`r ≥ 0`, where every discount factor is `≤ 1` and the discounted flow can only
-be smaller — so the published audit condition stays exact there.
+A root is a rate at which the terms of `XNPV` **cancel**. So the test is how
+much of the sum actually cancelled, not how big what is left happens to be:
 
-It is **wrong** near total loss. A nine-year flow at `r = -0.998` discounts by
-`(1+r)⁻⁹ ≈ 1e26`, so `XNPV` is a difference of terms around `1e30` and the
-smallest residual an `f64` can express is about `1e14` — eleven orders of
-magnitude above a tolerance of `1e-9 × 4e5`. That test cannot be met by any
-solver at any iteration count, and a real root found by the grid was being
-discarded because of it. This is the same defect as an absolute epsilon, one
-level up: the yardstick was itself scale-dependent.
+```
+ρ(r) = |Σ aᵢ(1+r)^-δᵢ| / Σ |aᵢ(1+r)^-δᵢ|        on the netted flow
+```
 
-Taking the larger of the two floors means the tolerance is never tighter than
-the floating-point noise of the quantity actually being measured.
+`ρ ∈ [0, 1]`. Near zero the terms genuinely cancelled. Near one nothing
+cancelled and the "sum" is just its one surviving term — which is what an
+**asymptote** looks like, and no absolute or gross-relative threshold can tell
+the two apart.
+
+Two earlier rules failed, in opposite directions, and `ρ` is what fixes both.
+
+`RESIDUAL_REL_TOL × gross_size` was the first. It is **too strict** near total
+loss: a nine-year flow at `r = -0.998` discounts by `(1+r)⁻⁹ ≈ 1e26`, so `XNPV`
+is a difference of terms around `1e30` and the smallest residual an `f64` can
+express is about `1e14` — eleven orders above a tolerance of `1e-9 × 4e5`. No
+solver can meet that at any iteration count, and real roots found by the grid
+were being discarded. `ρ` handles it natively: `fuzz/039` in the golden corpus
+has `|XNPV| = 1.008` against terms of `1.6e14`, i.e. `ρ = 6e-15`, ~29 ULP from
+zero — accepted, correctly.
+
+`RESIDUAL_REL_TOL × max(gross_size, discounted_gross)` was the second, and it
+is **too permissive**. Raising a tolerance can only ever admit more, and what
+it admitted was the asymptote: for
+
+```
+dates   = [2020-01-01, 2020-01-01, 2021-01-01, 2022-01-01, 2023-01-01]
+amounts = [-100, 100, -1000, 300, -50]
+```
+
+the day-zero pair cancels, so `XNPV` merely approaches zero as `r → ∞` and the
+flow has no root at all (with `v = (1+r)⁻¹ > 0` it reduces to
+`v(-1000 + 300v - 50v²)`, discriminant `-44`). The spreadsheet's absolute
+`1e-10` walks out to `r ≈ 2.4e13`, and the yardstick — still carrying the full
+`±100` that contributes nothing at that rate — was `1.6e-6` against a residual
+of `3.9e-11`. Accepted. `ρ = 1.000` rejects it.
+
+**Netting is load-bearing here, not an optimisation.** Un-netted, that same
+rate scores `ρ = 2e-13`, because the cancelling `±100` sits in the denominator
+while contributing nothing to the numerator. Two payments sharing a year
+fraction *are* one term of `XNPV`, so summing them first is exact — and it is
+what makes the ratio mean anything. Pinned by
+`netting_is_what_makes_the_ratio_mean_anything` in `tests/verification.rs`.
+
+Measured when the rule changed: of the 71 LibreOffice answers in the corpus,
+`ρ` rejects none — identical output, bit for bit, across all 89 cases × 4
+policies. It is strictly a better discriminator, not a tighter one.
+
+`is_root` evaluates `ρ` in log-rate space via `NettedFlow::scaled_g` and
+`scaled_gross`, which carry the same positive factor and therefore cancel in
+the ratio. That form cannot overflow, so there is one code path and no
+fallback.
+
+### What this does *not* change
+
+Phase 1's result is still returned without a residual check — §4.1 and the
+parity contract below are unchanged. `ρ` decides what gets *labelled* a root,
+not what gets returned. A spreadsheet rate that fails it is still handed back
+by `xirr()`, and reported as `XirrOutcome::UnverifiedRate` rather than as
+`Root`. The two policies that exist to trade parity for correctness — `Lowest`
+and `ClosestToGuess` — are the exception: they return `NaN` rather than fall
+back to a rate that fails `ρ`.
 
 ### `MAX_SEARCHED_RATE` is gone
 
