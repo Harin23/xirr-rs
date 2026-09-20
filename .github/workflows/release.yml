@@ -11,6 +11,11 @@ name: Release
 on:
   push:
     branches: [main]
+  # main requires a pull request, so there is otherwise no way to re-run
+  # release-please after a failure without inventing a commit. A manual run is
+  # safe by construction: build and publish still gate on release_created,
+  # which only flips when the release PR itself is merged.
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
