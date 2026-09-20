@@ -1,5 +1,9 @@
 import test from 'ava'
-import { xirr } from '../index.js'
+
+// `xirr` now returns a XirrResult; `xirrRate` is the old `number | null`
+// shape. These assertions are about the numbers, so they use `xirrRate`.
+// The result object itself is covered in outcomes.spec.ts.
+import { xirrRate as xirr } from '../index.js'
 
 const D = (s: string) => new Date(s + 'T00:00:00Z').getTime()
 

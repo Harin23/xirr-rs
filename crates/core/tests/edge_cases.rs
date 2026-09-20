@@ -7,7 +7,7 @@
 
 use std::str::FromStr;
 
-use xirr_core::{sign_changes, xirr, xirr_all_roots, xnpv, DateLike, RootPolicy};
+use xirr_core::{sign_changes, xirr, xirr_all_roots, xirr_outcome, xnpv, DateLike, RootPolicy};
 
 const ALL_POLICIES: [RootPolicy; 4] = [
   RootPolicy::SpreadsheetCompat,
@@ -109,6 +109,47 @@ fn non_finite_amounts_never_panic() {
     let result = xirr(&d, &a, None, None, None);
     if let Ok(rate) = result {
       assert!(rate.is_nan() || rate.is_finite(), "{poison}: got {rate}");
+    }
+  }
+}
+
+#[test]
+fn a_non_finite_amount_is_never_answered_with_a_rate() {
+  // The assertion above is vacuous - every `f64` is NaN or finite - so it
+  // cannot see the failure that matters: a rate reported as a *verified root*
+  // of a flow whose `XNPV` is NaN at every rate.
+  //
+  // The internal netted flow drops non-finite pairs, which is right for the
+  // existence questions it answers and wrong as a thing to check a rate
+  // against: it is a different cash flow from the one the caller passed. Any
+  // rate judged against it is a claim about a ledger row that was discarded.
+  //
+  // So the contract is the residual, not the shape of the answer: if `xnpv`
+  // cannot confirm a rate, no entry point may return one.
+  let d = annual(4);
+  for poison in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+    // The surviving payments (-1000, -2500, 600) must themselves have no root,
+    // so that any rate coming back is proof the poison was dropped rather
+    // than a root the flow genuinely has.
+    for index in 1..=2 {
+      let mut a = [-1000.0, -1000.0, -2500.0, 600.0];
+      a[index] = poison;
+      let label = format!("{poison} at {index}");
+
+      let rate = xirr(&d, &a, None, None, None).unwrap();
+      assert!(rate.is_nan(), "{label}: xirr returned {rate}");
+
+      assert_eq!(
+        xirr_all_roots(&d, &a, None).unwrap(),
+        Vec::<f64>::new(),
+        "{label}: xirr_all_roots reported roots"
+      );
+
+      let outcome = xirr_outcome(&d, &a, None, None, None).unwrap();
+      assert!(
+        outcome.rate().is_none(),
+        "{label}: xirr_outcome claimed {outcome:?}"
+      );
     }
   }
 }
@@ -248,7 +289,7 @@ fn every_policy_agrees_when_the_root_is_unique() {
   // Descartes: one sign change means one root, so policy cannot matter.
   let d = annual(4);
   let a = [-1000.0, 300.0, 400.0, 500.0];
-  assert_eq!(sign_changes(&a), 1);
+  assert_eq!(sign_changes(&d, &a, None).unwrap(), 1);
 
   let rates: Vec<f64> = ALL_POLICIES
     .iter()

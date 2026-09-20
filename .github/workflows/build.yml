@@ -44,10 +44,23 @@ jobs:
         run: pnpm install
       - name: ESLint
         run: pnpm lint
+      - name: Loader covers every published target
+        # 0.2.0 shipped an index.js with no win32 branch while
+        # x86_64-pc-windows-msvc was in napi.targets, so Windows installs threw
+        # "Cannot find native binding" next to an unread .node. The binding
+        # tests below catch that as well, but only after the whole matrix has
+        # built; this fails in seconds and names the platform.
+        run: pnpm check:targets
       - name: Cargo fmt
         run: cargo fmt -- --check
       - name: Clippy
-        run: cargo clippy
+        # `--workspace --all-targets`, not bare `cargo clippy`: the root
+        # manifest has its own `[package]`, so a bare run lints only the napi
+        # crate and treats xirr-core as an ordinary dependency - the whole
+        # test suite goes unlinted. A deny-by-default lint (approx_constant)
+        # sat in tests/robust_solver.rs through a full green CI run because of
+        # this.
+        run: cargo clippy --workspace --all-targets
       - name: Cargo test
         run: cargo test -p xirr-core
   build:

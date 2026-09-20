@@ -5,7 +5,8 @@
 A native (Rust) implementation of `XIRR` — the internal rate of return for an
 irregular schedule of cash flows — built to match Excel, Google Sheets and
 LibreOffice Calc, **including which root they pick when a cash flow has more
-than one valid IRR**.
+than one valid IRR**, and to tell you when the rate they picked is not actually
+a root.
 
 ```bash
 npm install xirr-rs
@@ -24,7 +25,8 @@ const { xirr } = require('xirr-rs')
 const dates = Float64Array.from([Date.UTC(2020, 0, 1), Date.UTC(2021, 0, 1), Date.UTC(2022, 0, 1)])
 const amounts = Float64Array.from([-1000, 750, 500])
 
-xirr(dates, amounts) // 0.175009264615451  (17.50%)
+xirr(dates, amounts) // { status: 'root', rate: 0.175009264615451, roots: [0.175009264615451] }
+xirr(dates, amounts).rate // 0.175009264615451  (17.50%)
 ```
 
 The same cash flow in a spreadsheet:
@@ -78,7 +80,7 @@ Excel-compatible spreadsheets, rather than trying to be clever.
 
 ### `xirr(dates, amounts, guess?, dayCountConvention?, policy?)`
 
-Returns `number | null`.
+Returns a `XirrResult`. See [Why not just a number](#why-not-just-a-number).
 
 | Argument             | Type           | Default                   | Notes                                                 |
 | -------------------- | -------------- | ------------------------- | ----------------------------------------------------- |
@@ -88,7 +90,7 @@ Returns `number | null`.
 | `dayCountConvention` | `string`       | `'act/365f'`              | Spreadsheets only implement `act/365f`                |
 | `policy`             | `RootPolicy`   | `'spreadsheetThenRobust'` | See below                                             |
 
-**Returns `null`** when no rate exists. Never returns `NaN`.
+**Never returns `NaN`.** Every non-answer is a named `status` with `rate: null`.
 
 **Throws** when: array lengths differ; the amounts are not both positive and
 negative; any date precedes `dates[0]`; `guess <= -1` or is not finite; or the
@@ -107,15 +109,45 @@ day count / policy string is unrecognised.
 Net present value at a given rate. Unlike `xirr` it does not require both signs,
 so you can use it to check the residual of any rate:
 
+**You no longer need to do this to find out whether a rate is a root** — the
+`status` tells you. A rate that fails the library's own check comes back as
+`unverifiedRate`, never as `root`:
+
 ```js
-const rate = xirr(dates, amounts)
-const gross = amounts.reduce((s, a) => s + Math.abs(a), 0)
-const isTrueRoot = Math.abs(xnpv(rate, dates, amounts)) < 1e-9 * gross
+const res = xirr(dates, amounts)
+if (res.status === 'root') {
+  post(res.rate) // already verified
+}
 ```
 
-Worth doing: spreadsheets use a weak convergence test and occasionally return a
-rate that is not actually a root. This package reproduces that faithfully — see
-[Fidelity, not correction](#fidelity-not-correction).
+If you want to run the check yourself, this is the one the library runs. Note
+the guard: `rate` is `null` for every failure status, and `xnpv` takes a
+`number`.
+
+```js
+const res = xirr(dates, amounts)
+if (res.rate !== null) {
+  // Net payments that share a date first - they are one term of XNPV however
+  // they were entered - then divide by the size of the terms actually being
+  // summed at this rate.
+  const residual = Math.abs(xnpv(res.rate, dates, amounts))
+  const terms = xnpv(res.rate, dates, amounts.map(Math.abs))
+  const isTrueRoot = residual <= 1e-9 * terms
+}
+```
+
+Dividing by the **discounted** terms rather than the gross cash flow is what
+makes this work at both ends of the range. At `r = -0.998` over nine years the
+discount factors reach `1e26`, so the smallest residual an `f64` can express is
+about `1e14` — an absolute or gross-relative test is unsatisfiable there. At the
+other end, a flow whose day-zero payments cancel has terms that vanish as the
+rate grows, and a gross-relative test passes for *every* large rate, on a cash
+flow with no root at all.
+
+Spreadsheets use a weak convergence test and occasionally return a rate that is
+not actually a root. This package reproduces that rate faithfully — see
+[Fidelity, not correction](#fidelity-not-correction) — and reports it as
+`unverifiedRate` so it is never mistaken for an answer.
 
 ### `xirrAllRoots(dates, amounts, dayCountConvention?)`
 
@@ -131,17 +163,141 @@ value from `xirr` is a convention, not a fact. For fund reporting, _"there are
 three IRRs and the spreadsheet picked the leftmost"_ is far more useful than one
 silent number.
 
-### `signChanges(amounts)`
+### `xirrRate(dates, amounts, guess?, dayCountConvention?, policy?)`
 
-Sign changes in the cash flow, ignoring zeros. **Zero or one means the IRR is
-unique** (Descartes' rule of signs) and every policy must agree. A cheap way to
-know whether ambiguity is even possible:
+The rate alone, or `null` if there is not one. The lossy convenience form of
+`xirr` — it cannot tell you _why_ there is no rate. Use it where a
+spreadsheet-style blank cell is genuinely all you need.
+
+### `signChanges(dates, amounts, dayCountConvention?)`
+
+Sign changes in the cash flow **after netting payments that share a date** and
+dropping zeros. Dates are required precisely because netting and ordering change
+the answer:
 
 ```js
-if (signChanges(amounts) <= 1) {
-  // unambiguous; no need to think about policy
-}
+// Same date, so mathematically one flow of +9000. No sign change, no IRR.
+signChanges(oneDate, Float64Array.from([-11000, 20000])) // 0
 ```
+
+| Sign changes | What it proves                            |
+| ------------ | ----------------------------------------- |
+| `0`          | **No IRR exists.** Proved, not suspected. |
+| `1`          | **Exactly one IRR exists.** Policy cannot matter. |
+| odd `n`      | At least one exists, at most `n`.         |
+| even `n > 0` | `0, 2, … n`. Nothing is proved.           |
+
+---
+
+## Why not just a number
+
+`null` used to be the answer for four different situations. They call for
+different responses, and one of them is a bug in your own data:
+
+| `status`              | `rate`   | What it means                                        | What to do             |
+| --------------------- | -------- | ---------------------------------------------------- | ---------------------- |
+| `root`                | the rate | One rate solves the cash flow.                        | Use it.                |
+| `multipleRoots`       | the pick | Several do; `roots` lists them all.                   | Report the ambiguity.  |
+| `unverifiedRate`      | the rate | The spreadsheet's answer is **not** a root.           | Do not post unchecked. |
+| `noRootExists`        | `null`   | **Proved**: no rate can solve this flow, at all.      | Reject the input.      |
+| `didNotConverge`      | `null`   | A root may exist; the solver did not produce one.     | Escalate.              |
+| `spreadsheetNumError` | `null`   | `#NUM!` reproduced under the `spreadsheet` policy.    | Retry without parity.  |
+
+`noRootExists` is a statement about your data, not about this library. It is
+returned when the cash flow, after netting payments that share a date and
+dropping zeros, has every remaining amount on the same side of zero — so every
+term of `XNPV` keeps one sign and the sum never reaches zero. The commonest
+cause is a capital call and a distribution booked on the same day that net to an
+inflow. A spreadsheet shows `#NUM!` for these too, and cannot tell you why.
+
+`didNotConverge` is a statement about this library, and should be treated as an
+incident rather than as "no IRR". It also covers the case where a root provably
+exists but lies outside the representable range below.
+
+---
+
+## Reachable rates
+
+The solver searches in `u = ln(1 + r)` over `[ln(2⁻⁵³), ln(f64::MAX)]`, i.e.
+`[-36.7368, 709.7827]`. In rate terms:
+
+| Bound   | `r`                             | Why that number                                       |
+| ------- | ------------------------------- | ----------------------------------------------------- |
+| Lowest  | `-0.9999999999999999` (`-1 + 2⁻⁵³`) | The smallest `f64` strictly above `-1`.           |
+| Highest | `≈ 1.7977e308` (`f64::MAX`)     | `expm1` of anything larger overflows to infinity.     |
+
+**These are representability boundaries, not tuning constants**, so the
+reachable range is the whole of what an `f64` rate can express. A root outside
+it cannot be returned by any implementation using `f64`, and is reported as
+`didNotConverge` rather than as a wrong number.
+
+This is not a theoretical concern. A cash flow whose netted day-zero position is
+a small outflow has a real, unique IRR far above the old `1e12` ceiling:
+
+| Netted day-0 position | IRR       |
+| --------------------- | --------- |
+| `-1`                  | `4.38e50` |
+| `-382`                | `2.40e20` |
+| `-1000`               | `4.43e15` |
+| `-80000`              | `10.34`   |
+
+The parity guarantee is narrower than the solver: a spreadsheet's own rescan
+grid stops at `-99%`, so `spreadsheet` policy will still report `#NUM!` in
+places the default policy answers.
+
+---
+
+## What is actually guaranteed
+
+Two different promises, and it is worth knowing which one you are relying on.
+
+**If a spreadsheet returns a rate, so does this package — the same one.** That
+is structural rather than empirical: the spreadsheet iteration always runs
+first, and under the default policy its result is returned unchanged. The
+robust path is only reachable once that iteration has given up, so it can add
+an answer but can never alter one.
+
+**If a root exists, this package finds it** — proved for an odd number of sign
+changes, and thorough but unproved for an even number:
+
+| Netted sign changes | Guarantee                                                                 |
+| ------------------- | ------------------------------------------------------------------------- |
+| `0`                 | **Proved**: no root exists. Reported as `noRootExists`.                    |
+| odd (`1, 3, …`)     | **Proved**: a root is found, or it is not representable as an `f64`.       |
+| even (`2, 4, …`)    | Not proved. Roots come in pairs, and a pair can hide between two points the search looks at, or touch zero without crossing it. |
+
+The odd case is a real proof. `XNPV` takes opposite signs at the two ends of
+the searched domain, the search spans that whole domain, so a bracket must
+exist and bisection cannot fail. Failure then means the root is outside what an
+`f64` can express — reported as `didNotConverge`, never as "no IRR".
+
+The even case has no such argument available, so it is handled by construction
+instead: the search also locates the turning points of the curve and looks
+there. Between any two roots the curve must turn, and a root that touches zero
+without crossing is itself a turning point — so both ways a pair can hide are
+covered. Measured over 2,113 generated cash flows built to have two roots at
+known positions, including pairs closer together than the search grid's own
+spacing, every root was found. That is evidence, not a proof.
+
+### Where it still under-reports
+
+Two constructions are known to defeat the enumeration. Both need roots packed
+far more tightly than any cash flow we have seen in practice, and in both
+`xirr` still returns a genuine rate — it is `xirrAllRoots` that comes up short,
+and with it the `multipleRoots` status:
+
+- **Three or more roots between two adjacent search points.** Two are handled,
+  because the curve turns once between them and that turn is detectable. Three
+  turn twice, which is not. In the dense band this needs three IRRs within
+  about 1% of each other.
+- **A tangential root lying between two ordinary roots.** Needs at least four
+  sign changes and a curve that grazes zero exactly between two crossings.
+
+The consequence worth knowing: in those cases `status` reads `root` rather than
+`multipleRoots`, so an ambiguity is reported as a single answer. If your inputs
+can plausibly contain several IRRs within a percent of one another, treat
+`signChanges()` as the authority on how many roots are possible rather than the
+length of `roots`.
 
 ---
 
@@ -154,12 +310,18 @@ xirr(dates, amounts, null, null, 'lowest')
 | Policy                                  | Behaviour                                                                                                                                        |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `'spreadsheetThenRobust'` **(default)** | The spreadsheet's rate whenever a spreadsheet has one; bracketed root finding otherwise. Never contradicts a spreadsheet, more likely to answer. |
-| `'spreadsheet'`                         | Strict parity, including `null` where a spreadsheet shows `#NUM!`. Use when output must tie out to a workbook.                                   |
+| `'spreadsheet'`                         | Strict parity, including `spreadsheetNumError` where a spreadsheet shows `#NUM!`. Use when output must tie out to a workbook.                    |
 | `'lowest'`                              | Smallest root. Deterministic and conservative — for reporting where understating return is the safe direction to fail.                           |
 | `'closestToGuess'`                      | Root nearest `guess`. Deterministic, and steerable if you know the expected magnitude.                                                           |
 
 The default is deliberately conservative: it can _add_ an answer where a
 spreadsheet gives up, but it can never _change_ one.
+
+The bottom two are the correctness-over-parity pair, and they mean it: if no
+root can be verified they return `null` rather than fall back to a spreadsheet
+rate that fails the check. The top two never return `null` where a spreadsheet
+returned a number — they report `unverifiedRate` instead, so the number is
+still there and still ties out to the workbook.
 
 ```js
 const flow = [
@@ -171,10 +333,12 @@ const flow = [
 const d = Float64Array.from(flow.map(([x]) => x))
 const a = Float64Array.from(flow.map(([, y]) => y))
 
-xirr(d, a) // -0.5718859515  <- what Calc returns
-xirr(d, a, null, null, 'lowest') // -0.5718859515
-xirr(d, a, null, null, 'closestToGuess') // -0.2192429679
-xirrAllRoots(d, a) // three roots
+xirr(d, a).status // 'multipleRoots'  <- the ambiguity is not hidden
+xirr(d, a).rate // -0.5718859515      <- what Calc returns
+xirr(d, a).roots // three roots, ascending
+
+xirr(d, a, null, null, 'lowest').rate // -0.5718859515
+xirr(d, a, null, null, 'closestToGuess').rate // -0.2192429679
 ```
 
 ---
@@ -190,9 +354,53 @@ This package reproduces that behaviour rather than fixing it. Returning a
 "better" answer than Excel would mean your report and your workbook disagree,
 which is the problem this package exists to solve.
 
-If you want correctness over parity you have two options: check the residual
-with `xnpv()`, or use `'lowest'` / `'closestToGuess'`, which enumerate roots
-properly instead of following the spreadsheet's path.
+**But it tells you.** Every rate is independently checked before it is
+described: XNPV is back-calculated at the answer and compared against the size
+of the terms actually being summed there. A rate that fails comes back as
+`unverifiedRate`, never as `root`. So parity and correctness stop competing —
+you get the spreadsheet's number *and* the knowledge that it is not a root, and
+you decide which matters for the report you are writing.
+
+```js
+const res = xirr(dates, amounts)
+
+switch (res.status) {
+  case 'root':
+  case 'multipleRoots':
+    post(res.rate) // already verified
+    break
+  case 'unverifiedRate':
+    // Matches the workbook. Is not a root. Your call.
+    flagForReview(res.rate, res.roots)
+    break
+  default:
+    escalate(res.status)
+}
+```
+
+`roots` is the useful part of that middle case. It holds what verification
+*did* find, so an empty array means no rate solves this flow at all, and a
+non-empty one means the spreadsheet picked a number that is not among the real
+answers — worth escalating, because the gap is usually enormous rather than
+marginal:
+
+```js
+// A capital call and a distribution booked the same day, netting to zero:
+// amounts = [-3254, +3254, +1755, -945, +2565, -559]
+
+xirr(d, a).status // 'unverifiedRate'
+xirr(d, a).rate //  46785040685798.04   <- what the spreadsheet returns
+xirr(d, a).roots // [-0.7709601506]     <- the actual IRR, -77.1%
+```
+
+That shape is not exotic — a same-day call and distribution is among the
+commonest things in a fund ledger. Across a sample of such flows, 57% of
+spreadsheet answers failed verification and 26% of those had a genuine root the
+spreadsheet had missed.
+
+If you want correctness over parity outright, use `'lowest'` / `'closestToGuess'`,
+which enumerate roots properly instead of following the spreadsheet's path. On
+the flow above, both return -77.1%.
 
 There is one place where this package deliberately does better: a spreadsheet's
 rescan grid stops at **-99%**, so a cash flow with an IRR below that returns
@@ -218,10 +426,18 @@ Supported: `act/365f` (default), `act/365a`, `act/364`, `act/360`, `act/act`,
 Types ship with the package and are generated from the Rust source:
 
 ```ts
-import { xirr, xnpv, xirrAllRoots, signChanges } from 'xirr-rs'
+import { xirr, xirrRate, xnpv, xirrAllRoots, signChanges, type XirrResult } from 'xirr-rs'
 
-const rate: number | null = xirr(dates, amounts)
+const result: XirrResult = xirr(dates, amounts)
+//    result.status: 'root' | 'multipleRoots' | 'noRootExists'
+//                 | 'didNotConverge' | 'spreadsheetNumError'
+
+// Or, if a blank cell is genuinely all you need:
+const rate: number | null = xirrRate(dates, amounts)
 ```
+
+`status` is a string union rather than a bare `string`, so an unhandled case is
+a type error rather than a runtime surprise.
 
 ---
 
@@ -240,6 +456,21 @@ to five sign reversals, and 18 flows with no solution at all.
 
 `__test__/golden/xirr_golden_corpus.xlsx` is included so you can open it in
 Excel or Google Sheets and verify against your own engine.
+
+**Which engine is actually asserted.** Only `expected_libreoffice.csv` is
+checked in, so the 71/71 above is LibreOffice. The test suite picks up
+`expected_excel.csv` and `expected_sheets.csv` automatically if you add them
+(see `scripts/README.md`), and names the missing ones in its output so their
+absence is not mistaken for coverage. Phase 1 is a port of the
+OpenOffice/LibreOffice `getXirr`, which is itself built for Excel
+compatibility, but that is a shared lineage rather than a measurement.
+
+Correctness does not rest on any of this. Every rate the library labels a root
+is checked against the mathematics — `|XNPV(r)|` relative to the terms summed
+at that rate — by `crates/core/tests/verification.rs`, which needs no
+spreadsheet at all. A rate that fails is reported as `unverifiedRate`, which is
+the case a corpus comparison cannot catch anyway: the weak convergence test is
+common to every engine, so they all agree on it.
 
 ---
 

@@ -7,9 +7,18 @@
 
 use std::{collections::BTreeMap, fs, path::PathBuf, str::FromStr};
 
-use xirr_core::{sign_changes, xirr, xirr_all_roots, xnpv, DateLike, RootPolicy};
+use xirr_core::{
+  sign_changes, xirr, xirr_all_roots, xirr_outcome, xnpv, DateLike, RootPolicy, XirrOutcome,
+};
 
 const REL_TOL: f64 = 1e-9;
+
+const ALL_POLICIES: [RootPolicy; 4] = [
+  RootPolicy::SpreadsheetCompat,
+  RootPolicy::SpreadsheetThenRobust,
+  RootPolicy::Lowest,
+  RootPolicy::ClosestToGuess,
+];
 
 fn golden_dir() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -83,8 +92,11 @@ fn matches_every_spreadsheet_engine_present() {
   let cases = load_cases();
   let mut engines_checked = 0;
 
+  let mut skipped = Vec::new();
+
   for engine in ENGINES {
     let Some(expected) = load_expected(engine) else {
+      skipped.push(engine);
       continue;
     };
     engines_checked += 1;
@@ -143,29 +155,93 @@ fn matches_every_spreadsheet_engine_present() {
   }
 
   assert!(engines_checked > 0, "no golden files found");
+
+  // Say it out loud. A missing engine file is a silent `continue`, so for as
+  // long as only `expected_libreoffice.csv` exists this test name overstates
+  // what ran: Excel parity is asserted nowhere in this repo. Not a failure -
+  // the file legitimately does not exist yet, and producing it needs a copy of
+  // Excel (`scripts/README.md`) - but it must not read as coverage.
+  if !skipped.is_empty() {
+    println!(
+      "SKIPPED (UNTESTED - no expected_*.csv): {}",
+      skipped.join(", ")
+    );
+  }
+}
+
+/// `rho(r) = |XNPV(r)| / sum |term_i(r)|` on the date-netted flow: how much of
+/// the sum actually cancelled. See `tests/verification.rs` for why the netting
+/// is load-bearing and why an absolute residual cannot do this job.
+fn rho(rate: f64, d: &[DateLike], a: &[f64]) -> f64 {
+  let mut netted: Vec<(DateLike, f64)> = Vec::new();
+  for (date, amount) in d.iter().zip(a) {
+    match netted.iter_mut().find(|(seen, _)| seen == date) {
+      Some((_, sum)) => *sum += amount,
+      None => netted.push((*date, *amount)),
+    }
+  }
+  netted.retain(|(_, amount)| *amount != 0.0);
+  let dates: Vec<DateLike> = netted.iter().map(|(d, _)| *d).collect();
+  let amounts: Vec<f64> = netted.iter().map(|(_, a)| *a).collect();
+  let magnitudes: Vec<f64> = amounts.iter().map(|x| x.abs()).collect();
+
+  let sum = xnpv(rate, &dates, &amounts, None).unwrap().abs();
+  let gross = xnpv(rate, &dates, &magnitudes, None).unwrap();
+  sum / gross
 }
 
 #[test]
-fn returned_rates_are_actual_roots() {
-  // Parity outranks correctness on the default path by design, so this
-  // reports rather than fails - but a growing list means the spreadsheet's
-  // weak convergence test is biting your data.
+fn every_status_the_corpus_produces_is_true() {
+  // The engine-independent oracle. `matches_every_spreadsheet_engine_present`
+  // can only check engines whose `expected_*.csv` is present, and a rate can
+  // be wrong in a way every engine agrees on - the weak convergence test is
+  // common to all of them. This asks the mathematics instead: whatever the
+  // library *calls* a root has to survive back-calculation.
+  //
+  // It deliberately does not assert which status each case gets. Parity
+  // decides that. It asserts only that the label is not a lie.
   let cases = load_cases();
-  let mut suspect = Vec::new();
+  let mut unverified = Vec::new();
+
   for (id, c) in &cases {
-    let Ok(rate) = xirr(&c.dates, &c.amounts, None, None, None) else {
-      continue;
-    };
-    if !rate.is_finite() {
-      continue;
-    }
-    let gross: f64 = c.amounts.iter().map(|a| a.abs()).sum::<f64>().max(1.0);
-    let residual = xnpv(rate, &c.dates, &c.amounts, None).unwrap().abs();
-    if residual > 1e-6 * gross {
-      suspect.push(format!("{id}: |XNPV|={residual:e}"));
+    for policy in ALL_POLICIES {
+      let outcome = xirr_outcome(&c.dates, &c.amounts, None, None, Some(policy)).unwrap();
+
+      let claimed: Vec<f64> = match &outcome {
+        XirrOutcome::Root(r) => vec![*r],
+        XirrOutcome::MultipleRoots { selected, all } => {
+          let mut v = all.clone();
+          v.push(*selected);
+          v
+        }
+        XirrOutcome::UnverifiedRate { rate, .. } => {
+          unverified.push(format!("{id}/{policy:?}: rate={rate:e}"));
+          Vec::new()
+        }
+        _ => Vec::new(),
+      };
+
+      for rate in claimed {
+        let r = rho(rate, &c.dates, &c.amounts);
+        assert!(
+          r <= 1e-9,
+          "{id}/{policy:?}: {outcome:?} claims {rate:e} is a root, but rho = {r:e}"
+        );
+      }
+
+      // The two surfaces must not disagree about the same arguments.
+      let plain = xirr(&c.dates, &c.amounts, None, None, Some(policy)).unwrap();
+      match outcome.rate() {
+        Some(r) => assert_eq!(r, plain, "{id}/{policy:?}: outcome {r} vs xirr {plain}"),
+        None => assert!(
+          plain.is_nan(),
+          "{id}/{policy:?}: outcome None vs xirr {plain}"
+        ),
+      }
     }
   }
-  println!("weak-convergence rates: {suspect:?}");
+
+  println!("unverified rates ({}): {unverified:?}", unverified.len());
 }
 
 #[test]
@@ -174,7 +250,7 @@ fn single_sign_change_implies_a_unique_root() {
   // (-1, inf), so no policy can disagree with any other. Pins the fast path.
   let cases = load_cases();
   for (id, c) in &cases {
-    if sign_changes(&c.amounts) > 1 {
+    if sign_changes(&c.dates, &c.amounts, None).unwrap() > 1 {
       continue;
     }
     let roots = xirr_all_roots(&c.dates, &c.amounts, None).unwrap();
