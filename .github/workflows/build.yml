@@ -8,7 +8,12 @@ on:
         # workflow otherwise checks out whatever commit triggered the run —
         # and those differ if another push lands on main first. Building the
         # tag keeps the binaries and the version honest.
-        description: Commit or tag to build. Empty builds the triggering commit.
+        #
+        # Pass a FULLY QUALIFIED ref (refs/tags/v1.2.3), never a bare name:
+        # actions/checkout resolves an unqualified ref to a branch before a tag,
+        # so a leftover branch sharing the tag's name silently builds the wrong
+        # commit and every job still reports success.
+        description: Fully qualified ref to build. Empty builds the triggering commit.
         type: string
         default: ''
 
