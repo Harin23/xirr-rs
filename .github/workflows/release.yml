@@ -16,6 +16,13 @@ on:
   # safe by construction: build and publish still gate on release_created,
   # which only flips when the release PR itself is merged.
   workflow_dispatch:
+    inputs:
+      publish_tag:
+        description: >-
+          Emergency re-publish: build and publish an EXISTING tag, e.g. v0.3.0.
+          Leave empty for a normal run, which only refreshes the release PR.
+        type: string
+        default: ''
 
 concurrency:
   group: release-${{ github.ref }}
@@ -44,25 +51,30 @@ jobs:
 
   build:
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: needs.release-please.outputs.release_created == 'true' || inputs.publish_tag != ''
     uses: ./.github/workflows/build.yml
     with:
-      ref: ${{ needs.release-please.outputs.tag_name }}
+      # refs/tags/ is load-bearing, not cosmetic. actions/checkout resolves a
+      # bare name to a BRANCH before a tag, so a stale branch named v0.3.0
+      # shadowed the release tag and the entire matrix built the wrong commit
+      # while reporting success. Fully qualifying the ref makes that impossible.
+      ref: refs/tags/${{ inputs.publish_tag || needs.release-please.outputs.tag_name }}
 
   publish:
     name: Publish
     needs: [release-please, build]
-    if: needs.release-please.outputs.release_created == 'true'
+    if: needs.release-please.outputs.release_created == 'true' || inputs.publish_tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write # npm provenance
     env:
-      TAG: ${{ needs.release-please.outputs.tag_name }}
+      TAG: ${{ inputs.publish_tag || needs.release-please.outputs.tag_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          # See the note on build.ref above: must be refs/tags/, never a bare name.
+          ref: refs/tags/${{ inputs.publish_tag || needs.release-please.outputs.tag_name }}
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
