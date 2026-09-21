@@ -78,10 +78,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-android-arm64')
-        const bindingPackageVersion = require('xirr-rs-android-arm64/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-android-arm64')
+        const bindingPackageVersion = require('xirr-rs-native-android-arm64/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -94,10 +94,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-android-arm-eabi')
-        const bindingPackageVersion = require('xirr-rs-android-arm-eabi/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-android-arm-eabi')
+        const bindingPackageVersion = require('xirr-rs-native-android-arm-eabi/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -114,10 +114,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-win32-x64-msvc')
-        const bindingPackageVersion = require('xirr-rs-win32-x64-msvc/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-win32-x64-msvc')
+        const bindingPackageVersion = require('xirr-rs-native-win32-x64-msvc/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -130,10 +130,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-win32-ia32-msvc')
-        const bindingPackageVersion = require('xirr-rs-win32-ia32-msvc/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-win32-ia32-msvc')
+        const bindingPackageVersion = require('xirr-rs-native-win32-ia32-msvc/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -146,10 +146,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-win32-arm64-msvc')
-        const bindingPackageVersion = require('xirr-rs-win32-arm64-msvc/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-win32-arm64-msvc')
+        const bindingPackageVersion = require('xirr-rs-native-win32-arm64-msvc/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -165,10 +165,10 @@ function requireNative() {
       loadErrors.push(e)
     }
     try {
-      const binding = require('xirr-rs-darwin-universal')
-      const bindingPackageVersion = require('xirr-rs-darwin-universal/package.json').version
-      if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-        throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+      const binding = require('xirr-rs-native-darwin-universal')
+      const bindingPackageVersion = require('xirr-rs-native-darwin-universal/package.json').version
+      if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+        throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
       }
       return binding
     } catch (e) {
@@ -181,10 +181,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-darwin-x64')
-        const bindingPackageVersion = require('xirr-rs-darwin-x64/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-darwin-x64')
+        const bindingPackageVersion = require('xirr-rs-native-darwin-x64/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -197,10 +197,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-darwin-arm64')
-        const bindingPackageVersion = require('xirr-rs-darwin-arm64/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-darwin-arm64')
+        const bindingPackageVersion = require('xirr-rs-native-darwin-arm64/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -217,10 +217,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-freebsd-x64')
-        const bindingPackageVersion = require('xirr-rs-freebsd-x64/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-freebsd-x64')
+        const bindingPackageVersion = require('xirr-rs-native-freebsd-x64/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -233,10 +233,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-freebsd-arm64')
-        const bindingPackageVersion = require('xirr-rs-freebsd-arm64/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-freebsd-arm64')
+        const bindingPackageVersion = require('xirr-rs-native-freebsd-arm64/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -254,10 +254,10 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          const binding = require('xirr-rs-linux-x64-musl')
-          const bindingPackageVersion = require('xirr-rs-linux-x64-musl/package.json').version
-          if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-            throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          const binding = require('xirr-rs-native-linux-x64-musl')
+          const bindingPackageVersion = require('xirr-rs-native-linux-x64-musl/package.json').version
+          if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
           return binding
         } catch (e) {
@@ -270,10 +270,10 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          const binding = require('xirr-rs-linux-x64-gnu')
-          const bindingPackageVersion = require('xirr-rs-linux-x64-gnu/package.json').version
-          if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-            throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          const binding = require('xirr-rs-native-linux-x64-gnu')
+          const bindingPackageVersion = require('xirr-rs-native-linux-x64-gnu/package.json').version
+          if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
           return binding
         } catch (e) {
@@ -288,10 +288,10 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          const binding = require('xirr-rs-linux-arm64-musl')
-          const bindingPackageVersion = require('xirr-rs-linux-arm64-musl/package.json').version
-          if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-            throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          const binding = require('xirr-rs-native-linux-arm64-musl')
+          const bindingPackageVersion = require('xirr-rs-native-linux-arm64-musl/package.json').version
+          if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
           return binding
         } catch (e) {
@@ -304,10 +304,10 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          const binding = require('xirr-rs-linux-arm64-gnu')
-          const bindingPackageVersion = require('xirr-rs-linux-arm64-gnu/package.json').version
-          if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-            throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          const binding = require('xirr-rs-native-linux-arm64-gnu')
+          const bindingPackageVersion = require('xirr-rs-native-linux-arm64-gnu/package.json').version
+          if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
           return binding
         } catch (e) {
@@ -322,10 +322,10 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          const binding = require('xirr-rs-linux-arm-musleabihf')
-          const bindingPackageVersion = require('xirr-rs-linux-arm-musleabihf/package.json').version
-          if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-            throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          const binding = require('xirr-rs-native-linux-arm-musleabihf')
+          const bindingPackageVersion = require('xirr-rs-native-linux-arm-musleabihf/package.json').version
+          if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
           return binding
         } catch (e) {
@@ -338,10 +338,10 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          const binding = require('xirr-rs-linux-arm-gnueabihf')
-          const bindingPackageVersion = require('xirr-rs-linux-arm-gnueabihf/package.json').version
-          if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-            throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          const binding = require('xirr-rs-native-linux-arm-gnueabihf')
+          const bindingPackageVersion = require('xirr-rs-native-linux-arm-gnueabihf/package.json').version
+          if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
           return binding
         } catch (e) {
@@ -356,10 +356,10 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          const binding = require('xirr-rs-linux-loong64-musl')
-          const bindingPackageVersion = require('xirr-rs-linux-loong64-musl/package.json').version
-          if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-            throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          const binding = require('xirr-rs-native-linux-loong64-musl')
+          const bindingPackageVersion = require('xirr-rs-native-linux-loong64-musl/package.json').version
+          if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
           return binding
         } catch (e) {
@@ -372,10 +372,10 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          const binding = require('xirr-rs-linux-loong64-gnu')
-          const bindingPackageVersion = require('xirr-rs-linux-loong64-gnu/package.json').version
-          if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-            throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          const binding = require('xirr-rs-native-linux-loong64-gnu')
+          const bindingPackageVersion = require('xirr-rs-native-linux-loong64-gnu/package.json').version
+          if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
           return binding
         } catch (e) {
@@ -390,10 +390,10 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          const binding = require('xirr-rs-linux-riscv64-musl')
-          const bindingPackageVersion = require('xirr-rs-linux-riscv64-musl/package.json').version
-          if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-            throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          const binding = require('xirr-rs-native-linux-riscv64-musl')
+          const bindingPackageVersion = require('xirr-rs-native-linux-riscv64-musl/package.json').version
+          if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
           return binding
         } catch (e) {
@@ -406,10 +406,10 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          const binding = require('xirr-rs-linux-riscv64-gnu')
-          const bindingPackageVersion = require('xirr-rs-linux-riscv64-gnu/package.json').version
-          if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-            throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          const binding = require('xirr-rs-native-linux-riscv64-gnu')
+          const bindingPackageVersion = require('xirr-rs-native-linux-riscv64-gnu/package.json').version
+          if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
           return binding
         } catch (e) {
@@ -423,10 +423,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-linux-ppc64-gnu')
-        const bindingPackageVersion = require('xirr-rs-linux-ppc64-gnu/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-linux-ppc64-gnu')
+        const bindingPackageVersion = require('xirr-rs-native-linux-ppc64-gnu/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -439,10 +439,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-linux-s390x-gnu')
-        const bindingPackageVersion = require('xirr-rs-linux-s390x-gnu/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-linux-s390x-gnu')
+        const bindingPackageVersion = require('xirr-rs-native-linux-s390x-gnu/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -459,10 +459,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-openharmony-arm64')
-        const bindingPackageVersion = require('xirr-rs-openharmony-arm64/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-openharmony-arm64')
+        const bindingPackageVersion = require('xirr-rs-native-openharmony-arm64/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -475,10 +475,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-openharmony-x64')
-        const bindingPackageVersion = require('xirr-rs-openharmony-x64/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-openharmony-x64')
+        const bindingPackageVersion = require('xirr-rs-native-openharmony-x64/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -491,10 +491,10 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('xirr-rs-openharmony-arm')
-        const bindingPackageVersion = require('xirr-rs-openharmony-arm/package.json').version
-        if (bindingPackageVersion !== '0.2.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.2.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        const binding = require('xirr-rs-native-openharmony-arm')
+        const bindingPackageVersion = require('xirr-rs-native-openharmony-arm/package.json').version
+        if (bindingPackageVersion !== '0.3.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 0.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
         return binding
       } catch (e) {
@@ -523,7 +523,7 @@ if (!nativeBinding || process.env.NAPI_RS_FORCE_WASI) {
   }
   if (!nativeBinding) {
     try {
-      wasiBinding = require('xirr-rs-wasm32-wasi')
+      wasiBinding = require('xirr-rs-native-wasm32-wasi')
       nativeBinding = wasiBinding
     } catch (err) {
       if (process.env.NAPI_RS_FORCE_WASI) {
