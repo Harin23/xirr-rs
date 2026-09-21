@@ -44,6 +44,14 @@ const annotate = (message) => {
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
 const targets = pkg.napi?.targets ?? []
 
+// napi names the sibling packages `${napi.packageName ?? name}-${abi}`, which
+// is NOT always `${name}-${abi}`: three of the original `xirr-rs-*` names were
+// unpublished in August 2026 and npm rejects republishing a tombstoned name
+// (E409 "Failed to save packument"), so the platform packages were renamed to
+// `xirr-rs-native-*` while the entry point kept `xirr-rs`. Reading `name` here
+// instead would look for requires the loader never contains.
+const bindingPackageName = pkg.napi?.packageName ?? pkg.name
+
 if (targets.length === 0) {
   annotate('package.json declares no napi.targets, so there is nothing to check')
   process.exit(1)
@@ -68,7 +76,7 @@ for (const target of targets) {
   // package one for what users actually install.
   const missing = [
     `require('./${pkg.napi.binaryName}.${abi}.node')`,
-    `require('${pkg.name}-${abi}')`,
+    `require('${bindingPackageName}-${abi}')`,
   ].filter((call) => !loader.includes(call))
 
   if (missing.length > 0) {

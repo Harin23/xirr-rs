@@ -5,15 +5,23 @@
 Eight packages go to npm: `xirr-rs`, plus one per platform.
 
 ```
-xirr-rs                     the JS entry point, no binary
-xirr-rs-darwin-arm64        one .node file
-xirr-rs-darwin-x64
-xirr-rs-linux-arm64-gnu
-xirr-rs-linux-arm64-musl
-xirr-rs-linux-x64-gnu
-xirr-rs-linux-x64-musl
-xirr-rs-win32-x64-msvc
+xirr-rs                       the JS entry point, no binary
+xirr-rs-native-darwin-arm64   one .node file
+xirr-rs-native-darwin-x64
+xirr-rs-native-linux-arm64-gnu
+xirr-rs-native-linux-arm64-musl
+xirr-rs-native-linux-x64-gnu
+xirr-rs-native-linux-x64-musl
+xirr-rs-native-win32-x64-msvc
 ```
+
+The platform packages are `xirr-rs-native-*`, not `xirr-rs-*`, and the entry
+point is still `xirr-rs`. `xirr-rs-darwin-arm64`, `xirr-rs-darwin-x64` and
+`xirr-rs-linux-arm64-musl` were published as 0.1.0 and then unpublished on
+2026-08-02. npm leaves a tombstone packument behind, and publishing into one
+fails with `E409 Failed to save packument` — which is what broke the first
+0.3.0 publish attempt. Those three names are unusable, so `napi.packageName`
+moved the whole set to a clean prefix. Do not "tidy" it back.
 
 `xirr-rs` lists all seven as `optionalDependencies`. Each platform package
 declares the `os`, `cpu` and `libc` it runs on, so npm installs the one that
