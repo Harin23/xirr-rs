@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/Harin23/xirr-rs/compare/v0.3.0...v0.3.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* publish platform packages as xirr-rs-native-* ([#13](https://github.com/Harin23/xirr-rs/issues/13)) ([645df1d](https://github.com/Harin23/xirr-rs/commit/645df1d349c06bc274b41c2a5ab1262382b08be5))
+
 ## [0.3.0](https://github.com/Harin23/xirr-rs/compare/v0.2.0...v0.3.0) (2026-09-21)
 
 
