@@ -6,8 +6,9 @@ The workbook is recalculated by LibreOffice Calc (whose XIRR is the
 Apache OpenOffice / LibreOffice `AnalysisAddIn::getXirr` implementation,
 built for Excel compatibility). The resulting values become the golden file.
 
-The same workbook can be opened in Excel or uploaded to Google Sheets to
-regenerate the golden values from those engines.
+The same workbook can be uploaded to Google Sheets to regenerate the golden
+values from that engine. Excel is intentionally not a golden target; see
+scripts/README.md.
 """
 import random
 from datetime import date, timedelta

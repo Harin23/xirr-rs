@@ -20,9 +20,10 @@ export declare function signChanges(dates: Float64Array, amounts: Float64Array, 
 /**
  * Internal rate of return for an irregular schedule.
  *
- * Returns the same rate Excel, Google Sheets and LibreOffice Calc return,
- * including which root is chosen when several exist, and additionally
- * answers cash flows those engines give up on.
+ * Returns the same rate LibreOffice Calc returns, including which root is
+ * chosen when several exist, and additionally answers cash flows Calc gives
+ * up on. Agrees with Excel only where Excel finds the same root; Google
+ * Sheets is unverified.
  *
  * # Breaking change
  *

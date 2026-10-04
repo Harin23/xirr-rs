@@ -7,12 +7,15 @@ repository. Read this before changing anything under `crates/core/`.
 
 ## What this package is
 
-`xirr-rs` computes XIRR and is built to return **the same rate Excel, Google
-Sheets and LibreOffice Calc return**, including which root they pick when a cash
-flow has several valid IRRs.
+`xirr-rs` computes XIRR and is built to return **the same rate LibreOffice Calc
+returns**, including which root it picks when a cash flow has several valid
+IRRs. It agrees with Excel only where Excel finds the same root, and Google
+Sheets is unverified — see "Excel divergence" in
+[`crates/core/docs/ALGORITHM.md`](./crates/core/docs/ALGORITHM.md#excel-divergence)
+for why Excel is not a target.
 
-That parity is the product. It outranks mathematical elegance, performance, and
-being "more correct" than a spreadsheet.
+That LibreOffice parity is the product. It outranks mathematical elegance,
+performance, and being "more correct" than a spreadsheet.
 
 ---
 
@@ -41,7 +44,7 @@ Copying the iteration matches 100%.
 | The `&&` in `cont = rate_eps > EXCEL_EPS && value.abs() > EXCEL_EPS`                   | Weak convergence test. It is _supposed_ to sometimes stop at a non-root.          |
 | `CashFlow::xnpv` using `powf`                                                          | `exp2(log2(a)*b)` loses ULP and changes which root is found.                      |
 | `year_fractions` measuring from `dates[0]`                                             | Using `min()` breaks parity on ~10% of multiple-root inputs.                      |
-| The fact that Phase 1's result is **returned** without a residual check                | Re-checking is what would let this print 200% where Excel prints 5%.              |
+| The fact that Phase 1's result is **returned** without a residual check                | Re-checking is what would let this print 200% where Calc prints 5%.               |
 | `is_root` measuring the **netted** flow                                                | Un-netted, a cancelling day-zero pair hides an asymptote. See below.              |
 
 If a change makes the code "better" by fixing one of the above, it is a
@@ -200,7 +203,7 @@ spreadsheet agrees with; do not add golden expectations for those.
 
 Expected values must come from a spreadsheet, never from this library. A golden
 file derived from the implementation tests nothing. See `scripts/README.md` for
-regenerating the corpus, including how to add Excel and Google Sheets alongside
+regenerating the corpus, including how to add Google Sheets alongside
 LibreOffice.
 
 **There is a second, independent kind of test, and it is not a golden file.**
@@ -220,5 +223,6 @@ lacking a spreadsheet source.
 
 Only `expected_libreoffice.csv` is checked in. `golden.rs` and `golden.spec.ts`
 name the engines they skipped rather than skipping silently — if you make the
-skip quiet again, Excel parity goes back to being untested while the suite
-still reads green.
+skip quiet again, Google Sheets parity goes back to being untested while the
+suite still reads green. Excel is skipped on purpose and should not get a
+golden file.

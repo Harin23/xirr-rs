@@ -2,9 +2,11 @@
 //!
 //! # What this module guarantees
 //!
-//! For a given cash flow it returns the same rate Excel, Google Sheets and
-//! LibreOffice Calc return - **including which root they pick when several
-//! exist** - and only deviates when those engines would give up entirely.
+//! For a given cash flow it returns the same rate LibreOffice Calc returns -
+//! **including which root it picks when several exist** - and only deviates
+//! when Calc would give up entirely. It agrees with Excel only where Excel
+//! finds the same root; Google Sheets is unverified. See "Excel divergence" in
+//! `docs/ALGORITHM.md`.
 //!
 //! # Why that is harder than it sounds
 //!
@@ -32,7 +34,7 @@
 //!     +-- Phase 1: CashFlow::solve_like_a_spreadsheet()   <- parity path
 //!     |     Newton from `guess` (default 0.1), then a fixed 0.01 rescan
 //!     |     grid over [-0.99, +0.99]. Verbatim port of the algorithm
-//!     |     Excel-compatible spreadsheets use. Returns NaN on #NUM!.
+//!     |     LibreOffice Calc uses. Returns NaN on #NUM!.
 //!     |
 //!     +-- Phase 2: CashFlow::solve_robustly()             <- only if 1 gave up
 //!           Bracketed Brent in **log-rate space** `u = ln(1 + r)` over the
@@ -43,7 +45,7 @@
 //!
 //! Phase 1's result is returned **verbatim, without checking its residual**.
 //! That is deliberate and is the core of the parity contract: re-checking is
-//! exactly what would let this library print 200% where Excel prints 5%.
+//! exactly what would let this library print 200% where Calc prints 5%.
 //! Callers who want to know whether the rate is a true root can call [`xnpv`]
 //! on it. See `docs/ALGORITHM.md` for the full rationale.
 //!

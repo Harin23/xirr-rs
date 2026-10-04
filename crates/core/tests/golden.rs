@@ -158,9 +158,10 @@ fn matches_every_spreadsheet_engine_present() {
 
   // Say it out loud. A missing engine file is a silent `continue`, so for as
   // long as only `expected_libreoffice.csv` exists this test name overstates
-  // what ran: Excel parity is asserted nowhere in this repo. Not a failure -
-  // the file legitimately does not exist yet, and producing it needs a copy of
-  // Excel (`scripts/README.md`) - but it must not read as coverage.
+  // what ran: only LibreOffice parity is asserted. Not a failure - Excel is
+  // intentionally not a golden target ("Excel divergence" in
+  // `docs/ALGORITHM.md`) and Google Sheets has not been captured yet
+  // (`scripts/README.md`) - but it must not read as coverage.
   if !skipped.is_empty() {
     println!(
       "SKIPPED (UNTESTED - no expected_*.csv): {}",

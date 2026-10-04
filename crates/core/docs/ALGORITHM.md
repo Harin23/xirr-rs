@@ -81,9 +81,31 @@ Ported verbatim in `optimize::newton_excel_order`.
 
 > ⚠️ This is a clean-room reimplementation, not Microsoft's code. Microsoft
 > documents 100 tries; LibreOffice uses 50 inner iterations × 200 rescans.
-> Residual edge cases may differ between real Excel and Calc. Generating
-> `expected_excel.csv` from an actual copy of Excel is the outstanding
-> validation step — see `scripts/README.md`.
+
+### Excel divergence
+
+The parity target is **LibreOffice Calc**. Excel was measured and is
+intentionally not a golden target.
+
+The 89-case corpus was recalculated in Excel for the web on 2026-10-04 and
+compared with `expected_libreoffice.csv`:
+
+| Cases | Outcome                                                                                                                                                         |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 57    | Same root. Differences up to ~5.5e-8 relative, consistent with Microsoft's documented precision ("accurate within 0.000001 percent").                           |
+| 7     | Both `#NUM!`.                                                                                                                                                   |
+| 4     | Excel returns a different, mathematically valid root (`multiroot/three-roots`, `multiroot/five-flips`, `fuzz/021`, `fuzz/031`). `xirr()`'s `roots` contains it. |
+| 16    | Excel returns `2.98023223876953E-09`, which is **not a root**: the XNPV residual is 24–90% of gross cash flow. This is a long-reported Excel defect.            |
+| 1     | `rate/near-total-loss` (`[-1000, +1]`): Excel returns -0.99898; LibreOffice `#NUM!`.                                                                            |
+| 4     | Excel `#NUM!` where LibreOffice finds a valid root.                                                                                                             |
+
+Changing the convergence threshold anywhere from `1e-10` to `1e-4` does not
+increase agreement with Excel, and Excel's algorithm is unpublished, so there
+is no port to make. Full Excel parity would also mean returning the 16 non-root
+results above, which this package will not do. Behaviour is therefore
+unchanged: results match LibreOffice to `1e-9` including root choice, agree with
+Excel only where Excel finds the same root (~`1e-8`), and Google Sheets is
+unverified.
 
 ---
 
@@ -114,7 +136,9 @@ can check the residual themselves and decide.
 different ones.
 
 Consequence: a true IRR below **-99%** is unreachable by Phase 1. A cash flow of
-`[-1000, +1]` has an IRR of -99.898% and every spreadsheet reports `#NUM!`.
+`[-1000, +1]` has an IRR of -99.898% and LibreOffice reports `#NUM!` (Excel for
+the web returned -99.898%, observed 2026-10-04 — see
+[Excel divergence](#excel-divergence)).
 Phase 2 finds it; `SpreadsheetCompat` does not.
 
 ### 4.3 The reference date is `dates[0]`, not `min(dates)`
@@ -177,7 +201,7 @@ PHASE 2  CashFlow::solve_robustly(guess)   — entirely in log-rate space
 
 **Phase 1's result is returned without checking its residual.** This is the
 crux of the parity contract. Re-checking is precisely what would let this
-library print 200% where Excel prints 5%: we would reject the spreadsheet's
+library print 200% where the spreadsheet prints 5%: we would reject the spreadsheet's
 weakly-converged answer and substitute a "better" root that no spreadsheet
 would ever show.
 
@@ -498,7 +522,7 @@ Phase 1 fails this test, which is the intent.
 
 The golden corpus is 89 cases whose expected values come from a **real
 spreadsheet engine**, never from this library. See `scripts/README.md` for
-regeneration and for adding Excel and Google Sheets alongside LibreOffice.
+regeneration and for adding Google Sheets alongside LibreOffice.
 
 Both golden suites read the same fixtures, so drift between the Rust core and
 the napi layer shows up as one suite passing and the other failing.
