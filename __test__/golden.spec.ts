@@ -3,9 +3,9 @@
  *
  * Fixtures in ./golden are produced by opening xirr_golden_corpus.xlsx in a
  * spreadsheet and exporting the `results` sheet. expected_libreoffice.csv is
- * checked in; add expected_excel.csv and expected_sheets.csv by running
- * `npm run golden:regen` (see scripts/README.md) and this file picks them up
- * automatically.
+ * checked in; add expected_sheets.csv as described in scripts/README.md and
+ * this file picks it up automatically. Excel is intentionally not a golden
+ * target - see "Excel divergence" in crates/core/docs/ALGORITHM.md.
  *
  * A row whose expected value is `NUM` means the engine reported a numeric
  * error. We assert that strict `spreadsheet` policy also returns null there,

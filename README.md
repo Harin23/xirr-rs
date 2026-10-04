@@ -1,12 +1,13 @@
 # xirr-rs
 
-**XIRR for Node.js that returns the same rate your spreadsheet does.**
+**XIRR for Node.js that returns the same rate LibreOffice Calc does.**
 
 A native (Rust) implementation of `XIRR` — the internal rate of return for an
-irregular schedule of cash flows — built to match Excel, Google Sheets and
-LibreOffice Calc, **including which root they pick when a cash flow has more
-than one valid IRR**, and to tell you when the rate they picked is not actually
-a root.
+irregular schedule of cash flows — built to match LibreOffice Calc, **including
+which root it picks when a cash flow has more than one valid IRR**, and to tell
+you when the rate it picked is not actually a root. It agrees with Excel only
+where Excel finds the same root; Google Sheets is unverified (see
+[Accuracy and testing](#accuracy-and-testing)).
 
 ```bash
 npm install xirr-rs
@@ -72,7 +73,7 @@ Over ~400 generated multiple-root cash flows:
 | **reproducing the iteration itself** | **100%**                       |
 
 So that is what this package does. It ports the search order used by
-Excel-compatible spreadsheets, rather than trying to be clever.
+LibreOffice Calc, rather than trying to be clever.
 
 ---
 
@@ -351,7 +352,7 @@ that is not actually a root, which is why spreadsheets occasionally report a
 strange IRR.
 
 This package reproduces that behaviour rather than fixing it. Returning a
-"better" answer than Excel would mean your report and your workbook disagree,
+"better" answer than the spreadsheet would mean your report and your workbook disagree,
 which is the problem this package exists to solve.
 
 **But it tells you.** Every rate is independently checked before it is
@@ -455,15 +456,18 @@ to five sign reversals, and 18 flows with no solution at all.
 ```
 
 `__test__/golden/xirr_golden_corpus.xlsx` is included so you can open it in
-Excel or Google Sheets and verify against your own engine.
+another engine and compare.
 
 **Which engine is actually asserted.** Only `expected_libreoffice.csv` is
-checked in, so the 71/71 above is LibreOffice. The test suite picks up
-`expected_excel.csv` and `expected_sheets.csv` automatically if you add them
-(see `scripts/README.md`), and names the missing ones in its output so their
-absence is not mistaken for coverage. Phase 1 is a port of the
-OpenOffice/LibreOffice `getXirr`, which is itself built for Excel
-compatibility, but that is a shared lineage rather than a measurement.
+checked in, so the 71/71 above is LibreOffice, and LibreOffice Calc is the only
+parity target. Results agree with Excel only where Excel finds the same root
+(to about `1e-8`); Excel was measured against this corpus and is intentionally
+not a golden target, because matching it would mean returning rates that are
+not roots — see
+["Excel divergence"](./crates/core/docs/ALGORITHM.md#excel-divergence). Google
+Sheets is unverified; `scripts/README.md` describes adding
+`expected_sheets.csv`, and the test suite names the missing engine files in
+its output so their absence is not mistaken for coverage.
 
 Correctness does not rest on any of this. Every rate the library labels a root
 is checked against the mathematics — `|XNPV(r)|` relative to the terms summed
@@ -484,7 +488,7 @@ The solver core derives from [pyxirr](https://github.com/Anexen/pyxirr)
 (`scaddins/source/analysis/financial.cxx`), Apache License 2.0 — see
 [`NOTICE`](./NOTICE). `brentq` is a port of SciPy's `brentq.c` (BSD-3-Clause).
 
-This is a clean-room reimplementation of published, Excel-compatible behaviour.
+This is a clean-room reimplementation of published spreadsheet behaviour.
 It is not affiliated with or endorsed by Microsoft, Google or The Document
 Foundation.
 
